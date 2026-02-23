@@ -7,6 +7,6 @@ export class CinemarkController {
 
   @Get('test')
   async runTest() {
-    return this.cinemarkService.testScrapingAbasto();
+    return this.cinemarkService.runScraper();
   }
 }
