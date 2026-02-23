@@ -4,7 +4,6 @@ import * as cheerio from 'cheerio';
 import { TmdbService } from '../../tmdb/tmdb.service';
 import { ScrapedMovie, Showtime, RawMultiplexFunction } from '../interfaces/scraper.interface';
 import { PrismaService } from '../../prisma/prisma.service';
-import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class MultiplexService {
@@ -92,11 +91,6 @@ export class MultiplexService {
     }
   }
 
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async handleCron() {
-    this.logger.log('⏰ ¡Ring Ring! El Cron Job despertó. Ejecutando Scraper Automático...');
-    await this.scrapeBillboard();
-  }
 
   async scrapeBillboard() {
     this.logger.log('Iniciando Scraper Pro desde la Home...');
