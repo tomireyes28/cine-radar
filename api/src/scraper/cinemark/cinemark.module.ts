@@ -7,6 +7,7 @@ import { TmdbModule } from '../../tmdb/tmdb.module';
 @Module({
   imports: [PrismaModule, TmdbModule],
   providers: [CinemarkService],
-  controllers: [CinemarkController]
+  controllers: [CinemarkController],
+  exports: [CinemarkService],
 })
 export class CinemarkModule {}

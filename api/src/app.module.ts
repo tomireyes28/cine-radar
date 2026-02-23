@@ -7,9 +7,10 @@ import { ScraperModule } from './scraper/scraper.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { MoviesModule } from './movies/movies.module';
+import { CronModule } from './cron/cron.module';
 
 @Module({
-  imports: [ScheduleModule.forRoot(), ConfigModule.forRoot(), TmdbModule, ScraperModule, PrismaModule, MoviesModule],
+  imports: [ScheduleModule.forRoot(), ConfigModule.forRoot(), TmdbModule, ScraperModule, PrismaModule, MoviesModule, CronModule],
   controllers: [AppController],
   providers: [AppService],
 })

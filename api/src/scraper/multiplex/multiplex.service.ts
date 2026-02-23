@@ -92,8 +92,6 @@ export class MultiplexService {
     }
   }
 
-  // ATENCIÓN: Para probarlo ahora mismo, le decimos que corra cada 10 segundos.
-  // Después lo cambiamos a la madrugada.
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
   async handleCron() {
     this.logger.log('⏰ ¡Ring Ring! El Cron Job despertó. Ejecutando Scraper Automático...');

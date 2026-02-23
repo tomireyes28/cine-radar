@@ -8,6 +8,7 @@ import { CinemarkModule } from './cinemark/cinemark.module';
 @Module({
   imports: [TmdbModule, PrismaModule, CinemarkModule], 
   providers: [MultiplexService],
-  controllers: [ScraperController]
+  controllers: [ScraperController],
+  exports: [MultiplexService],
 })
 export class ScraperModule {}
