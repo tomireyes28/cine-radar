@@ -5,9 +5,10 @@ import { ScraperController } from './scraper.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 import { CinemarkModule } from './cinemark/cinemark.module';
 import { CinepolisModule } from './cinepolis/cinepolis.module';
+import { ShowcaseModule } from './showcase/showcase.module';
 
 @Module({
-  imports: [TmdbModule, PrismaModule, CinemarkModule, CinepolisModule], 
+  imports: [TmdbModule, PrismaModule, CinemarkModule, CinepolisModule, ShowcaseModule], 
   providers: [MultiplexService],
   controllers: [ScraperController],
   exports: [MultiplexService],

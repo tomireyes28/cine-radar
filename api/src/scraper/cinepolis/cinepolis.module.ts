@@ -7,6 +7,8 @@ import { TmdbModule } from '../../tmdb/tmdb.module';
 @Module({
   imports: [PrismaModule, TmdbModule],
   providers: [CinepolisService],
-  controllers: [CinepolisController]
+  controllers: [CinepolisController],
+  exports: [CinepolisService]
+
 })
 export class CinepolisModule {}
