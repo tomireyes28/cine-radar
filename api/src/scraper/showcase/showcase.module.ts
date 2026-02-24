@@ -7,6 +7,7 @@ import { TmdbModule } from '../../tmdb/tmdb.module';
 @Module({
   imports: [PrismaModule, TmdbModule],
   providers: [ShowcaseService],
-  controllers: [ShowcaseController]
+  controllers: [ShowcaseController],
+  exports: [ShowcaseService]
 })
 export class ShowcaseModule {}

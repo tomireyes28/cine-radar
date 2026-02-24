@@ -1,33 +1,123 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { startOfDay, endOfDay, parseISO } from 'date-fns';
+import { Movie, CinemaChain } from '@prisma/client';
+import { 
+  MovieFilters, 
+  GroupedShowtimes, 
+  MovieDetailResponse 
+} from './movies.interface'; 
 
 @Injectable()
 export class MoviesService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async getMoviesWithShowtimes() {
-    // Buscamos todas las películas que tengan al menos un horario cargado
+  // 1. Obtener Cartelera
+  async getNowPlaying(filters: MovieFilters): Promise<Movie[]> {
+    const { date, city, chainId, cinemaId } = filters;
+
+    const queryDate = date ? parseISO(date) : new Date();
+    const start = startOfDay(queryDate);
+    const end = endOfDay(queryDate);
+
+    // Parseo seguro de números (evita pasar undefined a parseInt)
+    const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
+    const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
+
     return this.prisma.movie.findMany({
       where: {
         showtimes: {
-          some: {} // Filtra solo las pelis que están en cartelera
-        }
+          some: {
+            dateTime: {
+              gte: start,
+              lte: end,
+            },
+            location: {
+              name: city ? { contains: city, mode: 'insensitive' } : undefined,
+              chainId: parsedChainId,
+              id: parsedCinemaId,
+            },
+          },
+        },
       },
       include: {
-        // Incluimos los horarios y la info del cine en la misma respuesta
         showtimes: {
-          include: {
-            location: {
-              include: {
-                chain: true
-              }
-            }
-          },
-          orderBy: {
-            dateTime: 'asc' // Ordenamos los horarios por hora de la función
-          }
-        }
+          take: 1,
+          orderBy: { dateTime: 'asc' },
+          where: { dateTime: { gte: new Date() } },
+        },
+      },
+    });
+  }
+
+  // 2. Obtener Detalle + Funciones Agrupadas
+  async getMovieDetail(id: number, filters: MovieFilters): Promise<MovieDetailResponse | null> {
+    const { date, city } = filters;
+    const queryDate = date ? parseISO(date) : new Date();
+    const start = startOfDay(queryDate);
+    const end = endOfDay(queryDate);
+
+    const movie = await this.prisma.movie.findUnique({
+      where: { id },
+    });
+
+    if (!movie) return null;
+
+    const showtimes = await this.prisma.showtime.findMany({
+      where: {
+        movieId: id,
+        dateTime: {
+          gte: start,
+          lte: end,
+        },
+        location: {
+          name: city ? { contains: city, mode: 'insensitive' } : undefined,
+        },
+      },
+      include: {
+        location: {
+          include: { chain: true },
+        },
+      },
+      orderBy: {
+        dateTime: 'asc',
+      },
+    });
+
+    // Reduce tipado explícitamente
+    const showtimesByCinema = showtimes.reduce<GroupedShowtimes>((acc, show) => {
+      const cinemaName = show.location.name;
+
+      // Si no existe la entrada en el acumulador, la inicializamos
+      if (!acc[cinemaName]) {
+        acc[cinemaName] = {
+          cinema: show.location,
+          functions: [],
+        };
       }
+
+      // Agregamos la función al array
+      acc[cinemaName].functions.push({
+        id: show.id,
+        time: show.dateTime,
+        format: show.format,
+        language: show.language,
+        url: show.ticketUrl,
+      });
+
+      return acc;
+    }, {});
+
+    return {
+      ...movie,
+      cinemas: Object.values(showtimesByCinema),
+    };
+  }
+
+  // 3. Filtros
+  async getFiltersData(): Promise<CinemaChain[]> {
+    return this.prisma.cinemaChain.findMany({
+      include: { locations: true },
     });
   }
 }

@@ -1,8 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { CinemarkService } from '../scraper/cinemark/cinemark.service';
-import { MultiplexService } from '../scraper/multiplex/multiplex.service'; // (O como se llame tu servicio dentro de ScraperModule)
-import { CinepolisService } from '../scraper/cinepolis/cinepolis.service'; // <--- IMPORTAR
+import { MultiplexService } from '../scraper/multiplex/multiplex.service';
+import { CinepolisService } from '../scraper/cinepolis/cinepolis.service';
+import { ShowcaseService } from '../scraper/showcase/showcase.service';
+import { AtlasService } from '../scraper/atlas/atlas.service';
+import { CinemaCenterService } from '../scraper/cinemacenter/cinemacenter.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class CronService {
@@ -10,33 +14,60 @@ export class CronService {
 
   constructor(
     private readonly cinemarkService: CinemarkService,
-    private readonly multiplexService: MultiplexService, 
-    private readonly cinepolisService: CinepolisService 
+    private readonly multiplexService: MultiplexService,
+    private readonly cinepolisService: CinepolisService,
+    private readonly showcaseService: ShowcaseService,
+    private readonly atlasService: AtlasService,
+    private readonly cinemaCenterService: CinemaCenterService,
+    private readonly prisma: PrismaService
   ) {}
 
-  @Cron('0 3 * * *', {
-    name: 'nightly_scraping',
-    timeZone: 'America/Argentina/Buenos_Aires', 
-  })
-  async handleNightlyScraping() {
-    this.logger.log('⏰ [CRON JOB] Iniciando recolección nocturna de carteleras...');
-    
+  // Se ejecuta todos los días a las 04:00 AM
+  @Cron('0 4 * * *')
+  async handleDailyScraping() {
+    this.logger.log('🌅 Iniciando CRON JOB de actualización de cartelera...');
+
+    // 1. Limpieza opcional: Borrar funciones viejas para no llenar la DB
+    await this.cleanupOldShowtimes();
+
+    // 2. Ejecución Secuencial (Uno por uno para no saturar el servidor)
     try {
-      // 1. Multiplex
-      this.logger.log('Iniciando Multiplex...');
-      await this.multiplexService.scrapeBillboard(); 
-
-      // 2. Cinemark
-      this.logger.log('Iniciando Cinemark...');
       await this.cinemarkService.runScraper();
+    } catch (e) { this.logger.error('Fallo Cinemark', e); }
 
-      // 3. Cinépolis (El Nuevo)
-      this.logger.log('Iniciando Cinépolis...');
-      await this.cinepolisService.runScraper();  
+    try {
+      await this.multiplexService.scrapeBillboard();
+    } catch (e) { this.logger.error('Fallo Multiplex', e); }
 
-      this.logger.log('✅ [CRON JOB] Recolección nocturna finalizada con éxito.');
-    } catch (error) {
-      this.logger.error('❌ [CRON JOB] Ocurrió un error en la recolección nocturna.', error);
-    }
+    try {
+      await this.cinepolisService.runScraper();
+    } catch (e) { this.logger.error('Fallo Cinepolis', e); }
+
+    try {
+      await this.showcaseService.runScraper();
+    } catch (e) { this.logger.error('Fallo Showcase', e); }
+
+    try {
+      await this.atlasService.runScraper();
+    } catch (e) { this.logger.error('Fallo Atlas', e); }
+
+    try {
+      await this.cinemaCenterService.runScraper();
+    } catch (e) { this.logger.error('Fallo CinemaCenter', e); }
+
+    this.logger.log('✅ CRON JOB FINALIZADO: Cartelera actualizada.');
+  }
+
+  private async cleanupOldShowtimes() {
+    // Borrar funciones de ayer para atrás
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const result = await this.prisma.showtime.deleteMany({
+      where: {
+        dateTime: { lt: yesterday }
+      }
+    });
+    this.logger.log(`🧹 Limpieza: Se eliminaron ${result.count} funciones antiguas.`);
   }
 }

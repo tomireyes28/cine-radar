@@ -1,8 +1,31 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+import helmet from 'helmet';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  await app.listen(process.env.PORT ?? 3000);
+
+  // 1. HELMET: Protege contra vulnerabilidades web conocidas configurando cabeceras HTTP adecuadas
+  app.use(helmet());
+
+  // 2. CORS: Permite que el Frontend (Next.js) hable con el Backend
+  // Por ahora dejamos '*' (todos), luego lo cerramos solo a tu dominio
+  app.enableCors({
+    origin: '*', 
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
+  });
+
+  // 3. VALIDACIÓN GLOBAL:
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true, // Elimina propiedades que no estén en el DTO
+      forbidNonWhitelisted: true, // Tira error si mandan basura extra
+      transform: true, // Convierte tipos (ej: string "1" -> number 1) automáticamente
+    }),
+  );
+
+  await app.listen(3000);
 }
 bootstrap();
