@@ -84,4 +84,49 @@ export class GeoService {
 
     return { message: 'Direcciones y coordenadas actualizadas.' };
   }
+
+
+  // --- NUEVA FUNCIONALIDAD: CINES CERCANOS ---
+
+  // 1. La Fórmula Matemática (Haversine)
+  private getDistanceFromLatLonInKm(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371; // Radio de la Tierra en km
+    const dLat = this.deg2rad(lat2 - lat1);
+    const dLon = this.deg2rad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.deg2rad(lat1)) * Math.cos(this.deg2rad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const d = R * c; // Distancia en km
+    return parseFloat(d.toFixed(1)); // Redondeamos a 1 decimal (ej: 4.5 km)
+  }
+
+  private deg2rad(deg: number) {
+    return deg * (Math.PI / 180);
+  }
+
+  // 2. Función Pública para el Controlador
+  async getNearbyCinemas(userLat: number, userLng: number) {
+    // A. Traemos TODOS los cines que tengan coordenadas válidas
+    const cinemas = await this.prisma.cinemaLocation.findMany({
+      where: {
+        lat: { not: 0 }, // Ignoramos los que no pudimos geolocalizar
+      },
+      include: {
+        chain: true, // Traemos el nombre de la cadena (Cinemark, etc.)
+      },
+    });
+
+    // B. Calculamos la distancia para cada uno y lo agregamos al objeto
+    const cinemasWithDistance = cinemas.map((cinema) => {
+      const distance = this.getDistanceFromLatLonInKm(userLat, userLng, cinema.lat, cinema.lng);
+      return { ...cinema, distance }; // Agregamos la propiedad 'distance'
+    });
+
+    // C. Ordenamos por distancia (Menor a Mayor)
+    cinemasWithDistance.sort((a, b) => a.distance - b.distance);
+
+    return cinemasWithDistance;
+  }
 }

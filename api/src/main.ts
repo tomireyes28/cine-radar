@@ -21,8 +21,11 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true, // Elimina propiedades que no estén en el DTO
-      forbidNonWhitelisted: true, // Tira error si mandan basura extra
-      transform: true, // Convierte tipos (ej: string "1" -> number 1) automáticamente
+      forbidNonWhitelisted: true, // Tira error si mandan basura extra (TU ERROR ACTUAL)
+      transform: true, // <--- ESTO ES LO QUE FALTABA: Convierte "10" a 10 automáticamente
+      transformOptions: {
+        enableImplicitConversion: true, // Ayuda extra para convertir tipos
+      },
     }),
   );
 

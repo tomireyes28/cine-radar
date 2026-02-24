@@ -2,7 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { MoviesService } from './movies.service';
 import { GetMoviesDto } from './dto/get-movie.dto';
 import { GeoService } from './geo.service';
-// Borramos el import de MovieFilters porque el DTO ya hace el trabajo
+import { NearbyCinemasDto } from './dto/nearby-cinemas.dto';
 
 @Controller('movies')
 export class MoviesController {
@@ -10,7 +10,6 @@ export class MoviesController {
 
   @Get('now-playing')
   async getNowPlaying(@Query() filters: GetMoviesDto) {
-    // NestJS valida 'filters' contra el DTO y se lo pasa al servicio
     return this.moviesService.getNowPlaying(filters);
   }
 
@@ -18,6 +17,17 @@ export class MoviesController {
   async getFilters() {
     return this.moviesService.getFiltersData();
   }
+
+  @Get('admin/geoseed')
+  async seedCoordinates() {
+    return this.geoService.updateCinemasCoordinates();
+  }
+
+  @Get('nearby')
+async getNearby(@Query() query: NearbyCinemasDto) {
+   console.log(query); // Verificar que lat y lng llegan correctamente
+  return this.geoService.getNearbyCinemas(query.lat, query.lng);
+}
 
   @Get(':id')
   async getMovieDetail(
@@ -28,8 +38,9 @@ export class MoviesController {
     return this.moviesService.getMovieDetail(movieId, filters);
   }
 
-  @Get('admin/geoseed')
-  async seedCoordinates() {
-    return this.geoService.updateCinemasCoordinates();
-  }
+  
+
+  
+
+
 }
