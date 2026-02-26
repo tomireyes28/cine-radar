@@ -108,7 +108,7 @@ export class CinepolisService {
       location = await this.prisma.cinemaLocation.create({
         data: { 
           name: locConfig.name, 
-          address: 'Ver en web', // La API no nos da la dirección, la dejamos genérica o la agregamos al config
+          address: locConfig.address, // <--- AHORA SÍ: Usamos la dirección real
           lat: locConfig.lat, 
           lng: locConfig.lng,
           chainId: chain.id 

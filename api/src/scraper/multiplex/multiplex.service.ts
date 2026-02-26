@@ -2,8 +2,17 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { TmdbService } from '../../tmdb/tmdb.service';
-import { ScrapedMovie, Showtime, RawMultiplexFunction } from '../interfaces/scraper.interface';
 import { PrismaService } from '../../prisma/prisma.service';
+import { MULTIPLEX_LOCATIONS } from './multiplex.locations';
+
+// Interfaces tipadas para evitar 'any'
+interface RawMultiplexFunction {
+  complejo: string; 
+  dia: string;      
+  hora: string;     
+  formato: string;  
+  idioma?: string; // Puede ser opcional
+}
 
 @Injectable()
 export class MultiplexService {
@@ -22,132 +31,135 @@ export class MultiplexService {
     return `${mm}.${dd}.${yyyy}`;
   }
 
-  private async saveMoviesToDB(scrapedMovies: ScrapedMovie[], targetDateStr: string) {
-    this.logger.log('💾 Iniciando guardado en la Base de Datos...');
-
-    try {
-      // 1. Buscamos el cine que creaste manualmente en Prisma Studio
-      const location = await this.prisma.cinemaLocation.findFirst({
-        where: { name: 'Multiplex Pilar' }
-      });
-
-      if (!location) {
-        this.logger.warn('⚠️ No se encontró "Multiplex Pilar". Por favor, crealo en Prisma Studio.');
-        return;
-      }
-
-      for (const movie of scrapedMovies) {
-        const tmdb = movie.tmdbInfo as { tmdbId: number; officialTitle: string; posterUrl: string } | null;
-
-        if (tmdb && tmdb.tmdbId) {
-          
-          // 2. Guardamos la película en la tabla Movie
-          const savedMovie = await this.prisma.movie.upsert({
-            where: { tmdbId: tmdb.tmdbId },
-            update: {
-              title: tmdb.officialTitle,
-              posterUrl: tmdb.posterUrl,
-            },
-            create: {
-              tmdbId: tmdb.tmdbId,
-              title: tmdb.officialTitle,
-              posterUrl: tmdb.posterUrl,
-            }
-          });
-
-          // 3. Borramos horarios viejos de esta película en este cine para no duplicar
-          await this.prisma.showtime.deleteMany({
-            where: { movieId: savedMovie.id, locationId: location.id }
-          });
-
-          // 4. Preparamos los horarios para PostgreSQL
-          const showtimesToSave = movie.showtimes.map(st => {
-            const [mm, dd, yyyy] = targetDateStr.split('.');
-            const [hours, minutes] = st.time.split(':');
-            
-            // ATENCIÓN: En JS, los meses van del 0 al 11, por eso restamos 1 al mes
-            const showtimeDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hours), Number(minutes));
-
-            return {
-              movieId: savedMovie.id,
-              locationId: location.id,
-              dateTime: showtimeDate,
-              format: st.format,
-              language: st.language,
-              ticketUrl: movie.ticketUrl || ''
-            };
-          });
-
-          // 5. Guardamos todos los horarios en lote (Bulk Insert)
-          if (showtimesToSave.length > 0) {
-            await this.prisma.showtime.createMany({ data: showtimesToSave });
-            this.logger.debug(`🎬 Guardada: ${savedMovie.title} con ${showtimesToSave.length} horarios.`);
-          }
-        }
-      }
-      this.logger.log('✅ ¡Películas y Horarios sincronizados en PostgreSQL!');
-    } catch (error: any) {
-      this.logger.error(`❌ Error al guardar en Prisma: ${error.message}`);
-    }
-  }
-
-
   async scrapeBillboard() {
-    this.logger.log('Iniciando Scraper Pro desde la Home...');
-    const url = 'https://multiplex.com.ar/'; 
+    this.logger.log('🕵️‍♂️ Iniciando Scraper Multiplex (Todas las sedes)...');
+    const url = 'https://multiplex.com.ar/';
+    const targetDate = this.getTargetDateString();
 
     try {
       const { data } = await axios.get<string>(url);
       const $ = cheerio.load(data);
-      const extractedMovies: ScrapedMovie[] = [];
-      const targetDate = this.getTargetDateString(); 
-
       const movieItems = $('.funcion-item').toArray();
-      this.logger.log(`Se encontraron ${movieItems.length} películas en la Home.`);
+
+      this.logger.log(`🎬 Se encontraron ${movieItems.length} películas en cartelera.`);
+
+      await this.ensureLocationsExist();
 
       for (const element of movieItems) {
         const $el = $(element);
         const rawTitle = $el.find('.titulo-link').text().trim() || $el.find('img').attr('alt') || 'Sin Título';
-        const movieUrl = $el.find('.portada-link').attr('href');
+        const movieUrl = $el.find('.portada-link').attr('href') || url;
         const funcionesRaw = $el.attr('data-funciones');
 
-        if (funcionesRaw) {
-          const todasLasFunciones = JSON.parse(funcionesRaw) as RawMultiplexFunction[];
-          const funcionesHoyPilar = todasLasFunciones.filter(f => 
-            f.complejo === '187' && f.dia === targetDate
+        if (!funcionesRaw) continue;
+
+        let todasLasFunciones: RawMultiplexFunction[] = [];
+        try {
+          todasLasFunciones = JSON.parse(funcionesRaw) as RawMultiplexFunction[];
+        } catch (error) { 
+           console.warn(`⚠️ No se pudieron parsear las funciones para "${rawTitle}". Error:`, error);
+           continue;
+        }
+
+        const tmdbData = await this.tmdbService.searchMovie(rawTitle);
+        if (!tmdbData || !tmdbData.tmdbId) continue;
+
+        const dbMovie = await this.prisma.movie.upsert({
+          where: { tmdbId: tmdbData.tmdbId },
+          update: { title: tmdbData.officialTitle, posterUrl: tmdbData.posterUrl },
+          create: { tmdbId: tmdbData.tmdbId, title: tmdbData.officialTitle, posterUrl: tmdbData.posterUrl }
+        });
+
+        for (const locConfig of MULTIPLEX_LOCATIONS) {
+          const funcionesCine = todasLasFunciones.filter(f => 
+            f.complejo === locConfig.complexId && f.dia === targetDate
           );
 
-          if (funcionesHoyPilar.length > 0) {
-            this.logger.log(`✅ ¡Encontramos funciones para "${rawTitle}"!`);
-            const tmdbData = await this.tmdbService.searchMovie(rawTitle);
-            
-            const showtimes: Showtime[] = funcionesHoyPilar.map(f => ({
-              time: f.hora,
-              format: f.formato,
-              language: f.idioma
-            }));
-
-            extractedMovies.push({
-              cinemaTitle: rawTitle,
-              ticketUrl: movieUrl,
-              tmdbInfo: tmdbData,
-              showtimes: showtimes
-            });
+          if (funcionesCine.length > 0) {
+            await this.saveShowtimesForLocation(dbMovie.id, locConfig.name, funcionesCine, movieUrl);
           }
         }
       }
 
-      this.logger.log(`Proceso terminado. ${extractedMovies.length} películas con funciones hoy.`);
+      this.logger.log('🎉 ¡Multiplex sincronizado exitosamente!');
+
+    } catch (error: unknown) { // Manejo de errores seguro
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Error crítico en Scraper Multiplex: ${msg}`);
+    }
+  }
+
+  private async ensureLocationsExist() {
+    const chain = await this.prisma.cinemaChain.upsert({
+      where: { name: 'Multiplex' },
+      update: {},
+      create: { name: 'Multiplex' }
+    });
+
+    for (const config of MULTIPLEX_LOCATIONS) {
+      const exists = await this.prisma.cinemaLocation.findFirst({
+        where: { name: config.name, chainId: chain.id }
+      });
+
+      if (!exists) {
+        this.logger.log(`🏗️ Creando sede nueva: ${config.name}`);
+        await this.prisma.cinemaLocation.create({
+          data: {
+            name: config.name,
+            chainId: chain.id,
+            address: config.address,
+            lat: config.lat,
+            lng: config.lng
+          }
+        });
+      }
+    }
+  }
+
+  private async saveShowtimesForLocation(
+    movieId: number,
+    locationName: string,
+    funciones: RawMultiplexFunction[],
+    ticketUrl: string
+  ) {
+    const location = await this.prisma.cinemaLocation.findFirst({
+      where: { name: locationName }
+    });
+
+    if (!location) return;
+
+    await this.prisma.showtime.deleteMany({
+      where: {
+        movieId: movieId,
+        locationId: location.id,
+      }
+    });
+
+    for (const f of funciones) {
+      const [hours, minutes] = f.hora.split(':');
+      const [mm, dd, yyyy] = f.dia.split('.');
       
-      // Llamamos a la función y le pasamos la fecha para armar el DateTime
-      await this.saveMoviesToDB(extractedMovies, targetDate);
+      const showDate = new Date(Number(yyyy), Number(mm) - 1, Number(dd), Number(hours), Number(minutes));
 
-      return extractedMovies;
+      let format = '2D';
+      let lang = 'CASTELLANO';
+      const rawFormat = (f.formato || '').toUpperCase();
 
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-      this.logger.error(`Error en el Scraper Pro: ${errorMessage}`);
-      return [];
+      if (rawFormat.includes('3D')) format = '3D';
+      if (rawFormat.includes('4D')) format = '4D';
+      if (rawFormat.includes('PLATINUM') || rawFormat.includes('VIP')) format = 'PLATINUM';
+      if (rawFormat.includes('SUBT')) lang = 'SUBTITULADA';
+
+      await this.prisma.showtime.create({
+        data: {
+          movieId,
+          locationId: location.id,
+          dateTime: showDate,
+          format,
+          language: lang,
+          ticketUrl: ticketUrl
+        }
+      });
     }
   }
 }

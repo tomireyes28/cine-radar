@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 
-// Definimos la forma exacta de la película que nos devuelve TMDB
+// Interfaces para mantener el tipado estricto
 interface TmdbMovie {
   id: number;
   title: string;
@@ -9,7 +9,6 @@ interface TmdbMovie {
   release_date: string;
 }
 
-// Definimos la forma de la respuesta general de TMDB
 interface TmdbResponse {
   results: TmdbMovie[];
 }
@@ -21,14 +20,9 @@ export class TmdbService {
   private readonly baseUrl = 'https://api.themoviedb.org/3';
 
   private cleanTitle(rawTitle: string): string {
-    // 1. Cambiamos guiones por espacios normales
     let cleaned = rawTitle.replace(/[-_]/g, ' ');
-
-    // 2. Eliminamos las etiquetas técnicas de los cines
     const regex = /(3D|2D|XD|4D|IMAX|ATMOS|DOBLADA|SUBTITULADA|CASTELLANO|LATINO|MACROXE|COMFORT)/gi;
     cleaned = cleaned.replace(regex, '');
-
-    // 3. Borramos espacios dobles o triples que hayan quedado en el medio
     return cleaned.replace(/\s+/g, ' ').trim();
   }
 
@@ -36,12 +30,13 @@ export class TmdbService {
     const cleanedTitle = this.cleanTitle(rawTitle);
 
     try {
-      // Acá le pasamos <TmdbResponse> a axios para que sepa qué está recibiendo
       const response = await axios.get<TmdbResponse>(`${this.baseUrl}/search/movie`, {
         params: {
           api_key: this.apiKey,
           query: cleanedTitle,
-          language: 'es-AR',
+          language: 'es-MX',    // ✅ CAMBIO CLAVE: es-MX es el estándar para títulos Latinos
+          region: 'AR',         // ✅ OPCIONAL: Ayuda con fechas de estreno locales
+          include_adult: false, // 🧹 Evita resultados ruidosos
         },
       });
 
@@ -58,13 +53,12 @@ export class TmdbService {
         };
       }
 
-      this.logger.warn(`No se encontró película en TMDB para: "${cleanedTitle}"`);
+      this.logger.warn(`⚠️ No se encontró película en TMDB para: "${cleanedTitle}"`);
       return null;
 
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        this.logger.error(`Error consultando TMDB para "${cleanedTitle}":`, error.message);
-      }
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Error consultando TMDB para "${cleanedTitle}": ${msg}`);
       return null;
     }
   }

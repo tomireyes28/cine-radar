@@ -1,0 +1,14 @@
+# nixpacks.toml
+
+[phases.setup]
+nixPkgs = ["...", "google-chrome", "git"]
+
+[phases.build]
+cmds = ["npm ci", "npx prisma generate", "npm run build"]
+
+[start]
+cmd = "npm run start:prod"
+
+[variables]
+PUPPETEER_EXECUTABLE_PATH = "/usr/bin/google-chrome-stable"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"

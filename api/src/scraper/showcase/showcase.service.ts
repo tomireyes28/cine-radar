@@ -178,9 +178,9 @@ export class ShowcaseService {
              where: { name: 'Showcase' }, update: {}, create: { name: 'Showcase' }
         });
 
-        let location = await this.prisma.cinemaLocation.findFirst({
+       let location = await this.prisma.cinemaLocation.findFirst({
             where: {
-                name: locConfig.name,
+                name: locConfig.name, // Esto unifica IMAX y Norcenter bajo el mismo nombre
                 chainId: chain.id
             }
         });
@@ -190,9 +190,10 @@ export class ShowcaseService {
                 data: {
                     name: locConfig.name,
                     chainId: chain.id,
-                    address: 'Ver Web',
-                    lat: 0, 
-                    lng: 0 
+                    // CORRECCIÓN: Usamos los datos reales del config
+                    address: locConfig.address, 
+                    lat: locConfig.lat,
+                    lng: locConfig.lng
                 }
             });
         }
