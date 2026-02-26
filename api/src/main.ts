@@ -6,29 +6,31 @@ import helmet from 'helmet';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // 1. HELMET: Protege contra vulnerabilidades web conocidas configurando cabeceras HTTP adecuadas
   app.use(helmet());
 
-  // 2. CORS: Permite que el Frontend (Next.js) hable con el Backend
-  // Por ahora dejamos '*' (todos), luego lo cerramos solo a tu dominio
+  // 🔒 CORS BLINDADO: Solo tu Frontend puede pedir datos
   app.enableCors({
-    origin: '*', 
+    origin: [
+      'https://cinema-agenda-app.vercel.app', // Tu producción
+      'http://localhost:3000' // Para que puedas seguir probando en tu PC sin romper nada
+    ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
+    credentials: true, // Ahora sí podés poner true porque el origen es específico
   });
 
-  // 3. VALIDACIÓN GLOBAL:
   app.useGlobalPipes(
     new ValidationPipe({
-      whitelist: true, // Elimina propiedades que no estén en el DTO
-      forbidNonWhitelisted: true, // Tira error si mandan basura extra (TU ERROR ACTUAL)
-      transform: true, // <--- ESTO ES LO QUE FALTABA: Convierte "10" a 10 automáticamente
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
       transformOptions: {
-        enableImplicitConversion: true, // Ayuda extra para convertir tipos
+        enableImplicitConversion: true,
       },
     }),
   );
 
-  await app.listen(3000);
+  // Puerto dinámico de Railway
+  await app.listen(process.env.PORT || 3000);
+  console.log(`Application is running on: ${await app.getUrl()}`);
 }
 bootstrap();
