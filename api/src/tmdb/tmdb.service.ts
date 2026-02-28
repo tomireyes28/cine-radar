@@ -7,6 +7,7 @@ interface TmdbMovie {
   title: string;
   poster_path: string | null;
   release_date: string;
+  overview?: string;
 }
 
 interface TmdbResponse {
@@ -60,6 +61,25 @@ export class TmdbService {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`❌ Error consultando TMDB para "${cleanedTitle}": ${msg}`);
       return null;
+    }
+  }
+
+  async getUpcomingMovies(): Promise<TmdbMovie[]> {
+    try {
+      const response = await axios.get<TmdbResponse>(`${this.baseUrl}/movie/upcoming`, {
+        params: {
+          api_key: this.apiKey,
+          language: 'es-MX',
+          region: 'AR', // Solo estrenos en Argentina
+          page: 1, 
+        },
+      });
+
+      return response.data.results;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`❌ Error consultando próximos estrenos: ${msg}`);
+      return []; // Devolvemos array vacío para no romper el front
     }
   }
 }

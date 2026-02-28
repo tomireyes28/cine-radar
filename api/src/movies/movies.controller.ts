@@ -29,6 +29,11 @@ async getNearby(@Query() query: NearbyCinemasDto) {
   return this.geoService.getNearbyCinemas(query.lat, query.lng);
 }
 
+@Get('upcoming')
+  async getUpcoming() {
+    return this.moviesService.getUpcomingMovies();
+  }
+
   @Get(':id')
   async getMovieDetail(
     @Param('id') id: string,

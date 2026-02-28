@@ -7,10 +7,11 @@ import {
   GroupedShowtimes, 
   MovieDetailResponse 
 } from './movies.interface'; 
+import { TmdbService } from '../tmdb/tmdb.service';
 
 @Injectable()
 export class MoviesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly tmdbService: TmdbService) {}
 
   // 1. Obtener Cartelera
   async getNowPlaying(filters: MovieFilters): Promise<Movie[]> {
@@ -119,5 +120,18 @@ export class MoviesService {
     return this.prisma.cinemaChain.findMany({
       include: { locations: true },
     });
+  }
+
+  // 4. Próximos Estrenos
+  async getUpcomingMovies() {
+    const rawMovies = await this.tmdbService.getUpcomingMovies();
+
+    return rawMovies.map(movie => ({
+      id: movie.id,
+      title: movie.title,
+      posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
+      releaseDate: movie.release_date,
+      overview: movie.overview,
+    }));
   }
 }
