@@ -125,13 +125,30 @@ export class MoviesService {
   // 4. Próximos Estrenos
   async getUpcomingMovies() {
     const rawMovies = await this.tmdbService.getUpcomingMovies();
+    const today = new Date().toISOString().split('T')[0]; // Ej: "2026-02-28"
 
-    return rawMovies.map(movie => ({
-      id: movie.id,
-      title: movie.title,
-      posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      releaseDate: movie.release_date,
-      overview: movie.overview,
-    }));
+    const cleanedMovies = rawMovies.map(movie => {
+      // Si la fecha original es anterior a hoy, es un reestreno
+      const isReRelease = movie.release_date && movie.release_date < today;
+
+      return {
+        id: movie.id,
+        title: movie.title,
+        posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
+        releaseDate: movie.release_date,
+        overview: movie.overview,
+        isReRelease, // ✅ Pasamos esta nueva propiedad al front
+      };
+    });
+
+    // Ordenamos inteligentemente:
+    return cleanedMovies.sort((a, b) => {
+      // Si ambas son estrenos o ambas reestrenos, ordenamos por fecha
+      if (a.isReRelease === b.isReRelease) {
+        return new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime();
+      }
+      // Si una es reestreno, la mandamos al final de la lista (devuelve 1)
+      return a.isReRelease ? 1 : -1; 
+    });
   }
 }

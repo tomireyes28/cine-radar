@@ -3,14 +3,15 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Home, Film, MapPin, Search } from 'lucide-react';
+// ✅ Cambiamos los íconos importados
+import { Home, MapPin, CalendarDays } from 'lucide-react'; 
 import { clsx } from 'clsx';
 
+// ✅ Menú actualizado y limpio
 const navItems = [
   { name: 'Inicio', href: '/', icon: Home },
-  { name: 'Cartelera', href: '/movies', icon: Film },
   { name: 'Cines', href: '/theaters', icon: MapPin },
-  { name: 'Buscar', href: '/search', icon: Search },
+  { name: 'Próximamente', href: '/proximamente', icon: CalendarDays },
 ];
 
 export default function Navbar() {

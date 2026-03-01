@@ -2,6 +2,15 @@ import { Movie } from "@/types/movie";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
+export interface UpcomingMovie {
+  id: number;
+  title: string;
+  posterUrl: string;
+  releaseDate: string;
+  overview: string;
+  isReRelease: boolean;
+}
+
 export async function getNowPlaying(): Promise<Movie[]> {
   try {
     const res = await fetch(`${API_URL}/movies/now-playing`, {
@@ -51,5 +60,23 @@ export async function getCinemas() {
   } catch (error) {
     console.error("❌ Error fetching cinemas:", error);
     return null;
+  }
+
+}
+
+export async function getUpcomingMovies(): Promise<UpcomingMovie[]> {
+  try {
+    const res = await fetch(`${API_URL}/movies/upcoming`, {
+      next: { revalidate: 3600 }, // Cacheamos 1 hora (no cambia seguido)
+    });
+
+    if (!res.ok) {
+      throw new Error('Error al conectar con el backend');
+    }
+
+    return res.json();
+  } catch (error) {
+    console.error("❌ Falló el fetch de próximos estrenos:", error);
+    return []; 
   }
 }
