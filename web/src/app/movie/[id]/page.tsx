@@ -1,12 +1,12 @@
 import Image from 'next/image';
 import { getMovieDetail } from '@/lib/api';
 import DateSelector from '@/components/movies/DateSelector';
+import CinemaSelector from '@/components/movies/CinemaSelector'; // ✅ Importamos el selector
 import { MapPin, Ticket } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import Link from 'next/link';
 
-// --- DEFINICIÓN DE TIPOS ---
 interface FunctionItem {
   id: number;
   time: string;
@@ -25,16 +25,14 @@ interface CinemaGroup {
 }
 
 interface PageProps {
-  params: Promise<{ id: string }>; // <--- AHORA ES UNA PROMESA
-  searchParams: Promise<{ date?: string }>; // <--- ESTO TAMBIÉN
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ date?: string; cinemaId?: string }>; // ✅ Agregamos cinemaId a la promesa
 }
 
 export default async function MovieDetailPage({ params, searchParams }: PageProps) {
-  // 1. Esperamos los parámetros (REQUISITO DE NEXT.JS NUEVO)
   const { id } = await params;
-  const { date } = await searchParams;
+  const { date, cinemaId } = await searchParams; // ✅ Leemos el filtro
 
-  // 2. Buscamos los datos con el ID real
   const movie = await getMovieDetail(id, date);
 
   if (!movie) {
@@ -44,11 +42,22 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
         <h1 className="text-xl font-medium">No encontramos esa película</h1>
         <p className="text-sm">ID buscado: {id}</p>
         <Link href="/" className="px-4 py-2 bg-zinc-800 rounded-lg hover:bg-violet-600 transition-colors text-white">
-    Volver al Inicio
-</Link>
+          Volver al Inicio
+        </Link>
       </div>
     );
   }
+
+  // ✅ Preparamos la lista completa de cines (solo nombre e ID) para pasarle al Select
+  const allCinemasList = movie.cinemas.map((cg: CinemaGroup) => ({
+    id: cg.cinema.id,
+    name: cg.cinema.name,
+  }));
+
+  // ✅ Filtramos la grilla de funciones si hay un cine seleccionado en la URL
+  const filteredCinemas = cinemaId && cinemaId !== 'all'
+    ? movie.cinemas.filter((cg: CinemaGroup) => cg.cinema.id.toString() === cinemaId)
+    : movie.cinemas;
 
   const displayDate = date 
     ? format(new Date(date), "EEEE d 'de' MMMM", { locale: es })
@@ -66,21 +75,14 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
           className="object-cover blur-2xl opacity-40 scale-110"
           priority
         />
-        {/* Degradado para fundir */}
         <div className="absolute inset-0 bg-linear-to-b from-transparent via-zinc-950/60 to-zinc-950" />
         
-        {/* CORRECCIÓN DE ALINEACIÓN AQUÍ 👇 */}
-        {/* 1. Div de posicionamiento (se pega al fondo) */}
         <div className="absolute bottom-0 left-0 w-full pb-8 z-10">
-          {/* 2. Div de restricción (centra el contenido igual que abajo) */}
           <div className="container mx-auto px-4 md:px-6 flex flex-col md:flex-row gap-6 items-end">
-            
-            {/* Poster "Flotante" */}
             <div className="relative w-32 md:w-56 aspect-2/3 rounded-xl overflow-hidden shadow-2xl border border-white/10 mx-auto md:mx-0 shrink-0">
               <Image src={movie.posterUrl} alt={movie.title} fill className="object-cover" />
             </div>
             
-            {/* Textos */}
             <div className="flex-1 text-center md:text-left mb-2 md:mb-4">
               <h1 className="text-3xl md:text-5xl font-black text-white drop-shadow-lg mb-2 leading-tight">
                 {movie.title}
@@ -89,7 +91,6 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
                   ¡Disfrutá la cartelera actualizada en tiempo real!
               </p>
             </div>
-
           </div>
         </div>
       </div>
@@ -97,11 +98,18 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
       {/* --- CONTENIDO PRINCIPAL --- */}
       <div className="container mx-auto px-4 md:px-6 mt-8">
         
-        <div className="mb-8">
-            <h2 className="text-sm uppercase tracking-widest text-zinc-500 font-bold mb-4">
-                Elige tu día
-            </h2>
-            <DateSelector movieId={movie.id} />
+        {/* ✅ FILTROS: Fecha y Cine alineados */}
+        <div className="mb-8 flex flex-col md:flex-row gap-4 md:items-end bg-zinc-900/30 p-4 rounded-2xl border border-white/5">
+            <div>
+              <h2 className="text-xs uppercase tracking-widest text-zinc-500 font-bold mb-2 ml-1">Elige tu día</h2>
+              <DateSelector movieId={movie.id} />
+            </div>
+            
+            <div className="md:ml-auto w-full md:w-auto mt-2 md:mt-0">
+              <h2 className="text-xs uppercase tracking-widest text-zinc-500 font-bold mb-2 ml-1">Filtrar por Cine</h2>
+              {/* Le pasamos la lista completa de cines para que pueda elegir */}
+              <CinemaSelector cinemas={allCinemasList} movieId={movie.id} />
+            </div>
         </div>
 
         <div className="flex items-center gap-2 mb-6 border-b border-zinc-800 pb-4">
@@ -112,13 +120,13 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
         </div>
 
         <div className="grid gap-4 md:gap-6">
-            {movie.cinemas.length === 0 ? (
+            {/* ✅ Rendereamos la lista ya FILTRADA */}
+            {filteredCinemas.length === 0 ? (
                 <div className="p-8 text-center bg-zinc-900/50 rounded-xl border border-dashed border-zinc-800">
-                    <p className="text-zinc-500">No hay funciones disponibles para esta fecha 😢</p>
+                    <p className="text-zinc-500">No hay funciones disponibles para esta selección 😢</p>
                 </div>
             ) : (
-                // Usamos el tipo CinemaGroup para eliminar los 'any'
-                movie.cinemas.map((cinemaGroup: CinemaGroup) => (
+                filteredCinemas.map((cinemaGroup: CinemaGroup) => (
                     <div 
                         key={cinemaGroup.cinema.id} 
                         className="bg-zinc-900/40 border border-white/5 rounded-2xl p-4 md:p-6 hover:border-violet-500/30 transition-colors"
@@ -132,7 +140,7 @@ export default async function MovieDetailPage({ params, searchParams }: PageProp
                                     <h3 className="text-lg font-bold text-white">
                                         {cinemaGroup.cinema.name}
                                     </h3>
-                                    <span className="text-xs text-zinc-500 hover:text-violet-400 flex items-center gap-1 transition-colors cursor-pointer">
+                                    <span className="text-xs text-zinc-500 flex items-center gap-1">
                                         {cinemaGroup.cinema.address || 'Ver ubicación'} 
                                     </span>
                                 </div>

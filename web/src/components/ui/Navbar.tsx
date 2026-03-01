@@ -1,13 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image'; // ✅ Importamos Image de Next.js
 import { usePathname } from 'next/navigation';
 import { motion } from 'framer-motion';
-// ✅ Cambiamos los íconos importados
 import { Home, MapPin, CalendarDays } from 'lucide-react'; 
 import { clsx } from 'clsx';
 
-// ✅ Menú actualizado y limpio
 const navItems = [
   { name: 'Inicio', href: '/', icon: Home },
   { name: 'Cines', href: '/theaters', icon: MapPin },
@@ -22,14 +21,25 @@ export default function Navbar() {
       {/* --- DESKTOP NAVBAR (Top) --- */}
       <header className="hidden md:flex fixed top-0 w-full z-50 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-          {/* Logo Animado */}
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="text-2xl font-bold bg-linear-to-r from-violet-500 to-fuchsia-500 bg-clip-text text-transparent"
-          >
-            CinemaApp
-          </motion.div>
+          
+         {/* ✅ Logo forzado por ANCHO (w-) en lugar de ALTO (h-) */}
+          <Link href="/">
+            <motion.div 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="flex items-center hover:opacity-80 transition-opacity"
+            >
+              <Image 
+                src="/logo.png" 
+                alt="Cine Radar Logo" 
+                width={400} 
+                height={100} 
+                // 👇 ACÁ ESTÁ LA MAGIA: Controlamos el ancho, no el alto.
+                className="w-36 md:w-48 h-auto object-contain" 
+                priority 
+              />
+            </motion.div>
+          </Link>
 
           {/* Menú Clásico Desktop */}
           <nav className="flex gap-8">
