@@ -1,34 +1,28 @@
 import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
 import { ScraperController } from './scraper.controller';
-
-// Servicios
 import { MultiplexService } from './multiplex/multiplex.service';
 import { CinemarkService } from './cinemark/cinemark.service';
 import { ShowcaseService } from './showcase/showcase.service';
 import { AtlasService } from './atlas/atlas.service';
 import { CinepolisService } from './cinepolis/cinepolis.service';
 import { CinemaCenterService } from './cinemacenter/cinemacenter.service';
-
-// Módulos externos necesarios
-import { PrismaService } from '../prisma/prisma.service';
-import { TmdbService } from '../tmdb/tmdb.service';
-import { GeoService } from '../movies/geo.service';
+import { TitleNormalizerService } from './services/title-normalizer.service';
+import { ScraperOrchestratorService } from './services/scraper-orchestrator.service';
+import { TmdbModule } from '../tmdb/tmdb.module';
 
 @Module({
-  imports: [HttpModule],
-  controllers: [ScraperController], 
+  imports: [TmdbModule],
+  controllers: [ScraperController],
   providers: [
+    TitleNormalizerService,
     MultiplexService,
     CinemarkService,
     ShowcaseService,
     AtlasService,
     CinepolisService,
     CinemaCenterService,
-    PrismaService,
-    TmdbService,
-    GeoService
+    ScraperOrchestratorService,
   ],
-  exports: [MultiplexService, CinemarkService] 
+  exports: [ScraperOrchestratorService],
 })
 export class ScraperModule {}

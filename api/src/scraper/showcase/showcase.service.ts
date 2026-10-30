@@ -1,215 +1,152 @@
 import { Injectable, Logger } from '@nestjs/common';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { Browser, Page } from 'puppeteer'; 
-import { PrismaService } from '../../prisma/prisma.service';
-import { TmdbService } from '../../tmdb/tmdb.service';
+import axios from 'axios';
 import { SHOWCASE_LOCATIONS } from './showcase.locations';
+import {
+  buildArgentinaDate,
+  ICinemaScraper,
+  ScrapedChainResult,
+  ScrapedLocationResult,
+  ScrapedMovieItem,
+} from '../interfaces/scraper.interface';
+import { TitleNormalizerService } from '../services/title-normalizer.service';
 
-puppeteer.use(StealthPlugin());
+interface VoyAlCinePerformance {
+  performanceId: number;
+  showTime: string; // "14:15"
+}
 
-// 1. Definimos la interface (El contrato)
-interface ScrapedShowtime {
-  cinema: string;
-  formatRaw: string;
-  time: string;
+interface VoyAlCineFormat {
+  formatDescription: string; // "2D-Subtitulado"
+  showId: string;
+  performances: VoyAlCinePerformance[];
+}
+
+interface VoyAlCineCinema {
+  id: number;
+  name: string;
+  ewaveId: number;
+  formats: VoyAlCineFormat[];
+}
+
+interface VoyAlCineFilmTree {
+  id: number;
+  name: string;
+  days: Record<string, VoyAlCineCinema[]>;
 }
 
 @Injectable()
-export class ShowcaseService {
+export class ShowcaseService implements ICinemaScraper {
+  readonly chainKey = 'showcase';
+  readonly chainName = 'Showcase';
   private readonly logger = new Logger(ShowcaseService.name);
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly tmdbService: TmdbService
-  ) {}
+  constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async runScraper() {
-    this.logger.log('🍿 Iniciando recolección en Showcase (Modo: Película x Película)...');
+  async scrape(): Promise<ScrapedChainResult> {
+    this.logger.log(
+      'Iniciando recolección en Showcase (HTTP JSON API VoyAlCine - 0 MB Chrome)...',
+    );
 
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    }) as unknown as Browser;
+    const locationsMap = new Map<string, Map<string, ScrapedMovieItem>>();
 
     try {
-      const page = await browser.newPage();
-      
-      this.logger.log('📡 Conectando a la Home para obtener cartelera...');
-      await page.goto('https://entradas.todoshowcase.com/', { waitUntil: 'domcontentloaded' });
+      const { data: homeHtml } = await axios.get<string>(
+        'https://entradas.todoshowcase.com/',
+        { timeout: 15000 },
+      );
 
-      const movieLinks = await page.evaluate(() => {
-        const anchors = Array.from(document.querySelectorAll('.category-thumb a'));
-        return anchors
-          .map((a) => (a as HTMLAnchorElement).href)
-          .filter((href) => href.includes('pelicula.aspx?filmid='));
-      });
+      const filmIds = [
+        ...new Set(
+          [...homeHtml.matchAll(/pelicula\.aspx\?filmid=(\d+)/gi)].map(
+            (m) => m[1],
+          ),
+        ),
+      ];
 
-      const uniqueLinks = [...new Set(movieLinks)];
-      this.logger.log(`🎬 Se encontraron ${uniqueLinks.length} películas en cartelera.`);
+      this.logger.log(`Detectados ${filmIds.length} filmIds en Showcase.`);
 
-      for (const link of uniqueLinks) {
+      for (const filmId of filmIds) {
         try {
-          await this.scrapeMovieDetail(page, link);
-          await new Promise((r) => setTimeout(r, 2000));
-        } catch (e) {
-          const errorMessage = e instanceof Error ? e.message : String(e);
-          this.logger.error(`❌ Error procesando película ${link}: ${errorMessage}`);
+          const { data: tree } = await axios.get<VoyAlCineFilmTree>(
+            `https://api.voyalcine.net/films/${filmId}/tree/showcase`,
+            { timeout: 10000 },
+          );
+
+          if (!tree || !tree.name || !tree.days) continue;
+
+          const cleanTitle = this.normalizer.normalize(tree.name);
+          if (!cleanTitle) continue;
+
+          const ticketUrl = `https://entradas.todoshowcase.com/showcase/pelicula.aspx?filmid=${filmId}`;
+
+          for (const [dateStr, cinemas] of Object.entries(tree.days)) {
+            if (!Array.isArray(cinemas)) continue;
+
+            for (const cinema of cinemas) {
+              const locConfig = SHOWCASE_LOCATIONS.find((l) =>
+                cinema.name.toLowerCase().includes(l.webName.toLowerCase()),
+              );
+              if (!locConfig) continue;
+
+              const isImaxVenue = cinema.name
+                .toUpperCase()
+                .includes('IMAX');
+
+              if (!locationsMap.has(locConfig.name)) {
+                locationsMap.set(locConfig.name, new Map<string, ScrapedMovieItem>());
+              }
+              const locMovies = locationsMap.get(locConfig.name)!;
+
+              if (!locMovies.has(cleanTitle)) {
+                locMovies.set(cleanTitle, {
+                  rawTitle: cleanTitle,
+                  showtimes: [],
+                });
+              }
+              const movieEntry = locMovies.get(cleanTitle)!;
+
+              for (const fmt of cinema.formats || []) {
+                const rawFormatDesc = isImaxVenue
+                  ? `IMAX ${fmt.formatDescription}`
+                  : fmt.formatDescription;
+                const format = this.normalizer.normalizeFormat(rawFormatDesc);
+                const language =
+                  this.normalizer.normalizeLanguage(rawFormatDesc);
+
+                for (const perf of fmt.performances || []) {
+                  if (!perf.showTime) continue;
+                  const dateTime = buildArgentinaDate(dateStr, perf.showTime);
+
+                  movieEntry.showtimes.push({
+                    dateTime,
+                    format,
+                    language,
+                    ticketUrl,
+                  });
+                }
+              }
+            }
+          }
+        } catch {
+          // Skip individual film failure without stopping the rest
         }
       }
-
-      await browser.close();
-      this.logger.log('🎉 ¡Showcase sincronizado exitosamente!');
-
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      this.logger.error('❌ Error general en Showcase:', errorMessage);
-      if (browser) await browser.close();
-    }
-  }
-
-  private async scrapeMovieDetail(page: Page, url: string) {
-    this.logger.log(`➡️ Procesando: ${url}`);
-    await page.goto(url, { waitUntil: 'domcontentloaded' });
-
-    const rawTitle = await page.evaluate(() => {
-        // Buscamos específicamente el <strong> dentro del h2 con clase 'name'
-        const strongTag = document.querySelector('.movie-info-box .name strong');
-        
-        // Si existe el strong, usamos ese texto (es el más limpio)
-        if (strongTag && strongTag.textContent) {
-            return strongTag.textContent.trim();
-        }
-
-        // Fallback: Si no hay strong, buscamos el h2 completo
-        const h2 = document.querySelector('.movie-info-box .name');
-        return h2 ? h2.textContent?.trim() || null : null;
-    });
-
-    if (!rawTitle) {
-        this.logger.warn('⚠️ No se encontró título de la película. Saltando...');
-        return;
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error general en Showcase: ${msg}`);
     }
 
-    const tmdbInfo = await this.tmdbService.searchMovie(rawTitle);
-    if (!tmdbInfo || !tmdbInfo.tmdbId) {
-        this.logger.warn(`⚠️ TMDB no encontró: "${rawTitle}"`);
-        return;
+    const locations: ScrapedLocationResult[] = [];
+    for (const [locationName, moviesMap] of locationsMap.entries()) {
+      locations.push({
+        locationName,
+        movies: Array.from(moviesMap.values()),
+      });
     }
 
-    const movie = await this.prisma.movie.upsert({
-        where: { tmdbId: tmdbInfo.tmdbId },
-        update: {},
-        create: {
-            tmdbId: tmdbInfo.tmdbId,
-            title: tmdbInfo.officialTitle,
-            posterUrl: tmdbInfo.posterUrl
-        }
-    });
-
-    // --- AQUÍ ESTÁ LA MAGIA ---
-    const showtimesData = await page.evaluate(() => {
-        // Usamos la estructura literal acá adentro porque 'ScrapedShowtime' no existe en el navegador
-        const results: { cinema: string; formatRaw: string; time: string }[] = [];
-        
-        const headers = document.querySelectorAll('.ui-accordion-header');
-
-        headers.forEach((header) => {
-            const cinemaName = header.textContent?.trim() || '';
-            const contentDiv = header.nextElementSibling; 
-
-            if (contentDiv) {
-                const formatDivs = contentDiv.querySelectorAll('.op_format');
-                
-                formatDivs.forEach((fmtDiv) => {
-                    const formatText = fmtDiv.textContent?.trim() || ''; 
-                    const perfsDiv = fmtDiv.nextElementSibling;
-                    
-                    if (perfsDiv) {
-                        const buttons = perfsDiv.querySelectorAll('button.op_perf');
-                        buttons.forEach((btn) => {
-                            results.push({
-                                cinema: cinemaName,
-                                formatRaw: formatText,
-                                time: btn.textContent?.trim() || ''
-                            });
-                        });
-                    }
-                });
-            }
-        });
-        return results;
-    }) as ScrapedShowtime[]; // <--- 2. ¡AQUÍ USAMOS LA INTERFACE!
-
-    let count = 0;
-    // Ahora 'item' ya sabe que es de tipo ScrapedShowtime
-    for (const item of showtimesData) {
-        if (!item.cinema || !item.time) continue;
-
-        const locConfig = SHOWCASE_LOCATIONS.find((l) => 
-            item.cinema.toLowerCase().includes(l.webName.toLowerCase()) 
-        );
-
-        if (!locConfig) continue;
-
-        const parts = item.time.split(':');
-        if (parts.length !== 2) continue;
-        
-        const hours = parseInt(parts[0], 10);
-        const minutes = parseInt(parts[1], 10);
-        
-        const now = new Date();
-        const showDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes);
-        
-        if (showDate < now && hours < 6) {
-             showDate.setDate(showDate.getDate() + 1);
-        }
-
-        let format = '2D';
-        let lang = 'CASTELLANO';
-        const rawUpper = item.formatRaw.toUpperCase();
-        
-        if (rawUpper.includes('3D')) format = '3D';
-        if (rawUpper.includes('4D')) format = '4D';
-        if (rawUpper.includes('IMAX')) format = 'IMAX';
-        if (rawUpper.includes('SUBTITULADA') || rawUpper.includes('SUBTITULADO')) lang = 'SUBTITULADA';
-
-        const chain = await this.prisma.cinemaChain.upsert({
-             where: { name: 'Showcase' }, update: {}, create: { name: 'Showcase' }
-        });
-
-       let location = await this.prisma.cinemaLocation.findFirst({
-            where: {
-                name: locConfig.name, // Esto unifica IMAX y Norcenter bajo el mismo nombre
-                chainId: chain.id
-            }
-        });
-
-        if (!location) {
-            location = await this.prisma.cinemaLocation.create({
-                data: {
-                    name: locConfig.name,
-                    chainId: chain.id,
-                    // CORRECCIÓN: Usamos los datos reales del config
-                    address: locConfig.address, 
-                    lat: locConfig.lat,
-                    lng: locConfig.lng
-                }
-            });
-        }
-
-        await this.prisma.showtime.create({
-            data: {
-                movieId: movie.id,
-                locationId: location.id,
-                dateTime: showDate,
-                format: format,
-                language: lang,
-                ticketUrl: url 
-            }
-        });
-        count++;
-    }
-    this.logger.debug(`✅ Guardados ${count} horarios de "${movie.title}"`);
+    return {
+      chainName: this.chainName,
+      locations,
+    };
   }
 }

@@ -1,202 +1,141 @@
 import { Injectable, Logger } from '@nestjs/common';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { PrismaService } from '../../prisma/prisma.service';
-import { TmdbService } from '../../tmdb/tmdb.service';
-import { CINEMARK_LOCATIONS, CinemarkLocationConfig } from './cinemark.locations';
+import axios from 'axios';
+import { CINEMARK_LOCATIONS } from './cinemark.locations';
+import {
+  buildArgentinaDate,
+  ICinemaScraper,
+  ScrapedChainResult,
+  ScrapedLocationResult,
+  ScrapedMovieItem,
+} from '../interfaces/scraper.interface';
+import { TitleNormalizerService } from '../services/title-normalizer.service';
 
-// Interfaces estrictas para eliminar los 'any'
-export interface ExtractedShowtime {
-  time: string;
-  format: string;
-  language: string;
+interface CinemarkBffTheater {
+  id: number;
+  name: string;
+  slug: string;
 }
 
-export interface ExtractedMovie {
-  title: string;
-  totalShowtimes: number;
-  showtimes: ExtractedShowtime[];
+interface CinemarkBffShowtime {
+  movieId: string;
+  movieName: string;
+  language?: {
+    name?: string;
+    shortName?: string;
+  };
+  sessionFormat?: string;
+  sessionDateTime: string; // e.g. "2026-10-30T17:40:00.000Z" (wall-clock AR time)
+  sessionDisplayDate: string; // "2026-10-30"
 }
-
-puppeteer.use(StealthPlugin());
 
 @Injectable()
-export class CinemarkService {
+export class CinemarkService implements ICinemaScraper {
+  readonly chainKey = 'cinemark';
+  readonly chainName = 'Cinemark';
   private readonly logger = new Logger(CinemarkService.name);
+  private readonly bffBaseUrl = 'https://bff.cinemark.com.ar/api';
 
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly tmdbService: TmdbService
-  ) {}
+  constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async runScraper() {
-    this.logger.log('🕵️‍♂️ Iniciando Misión Sigilosa Global en Cinemark...');
-
-    const browser = await puppeteer.launch({
-      headless: true, 
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
+  async scrape(): Promise<ScrapedChainResult> {
+    this.logger.log(
+      'Iniciando recolección en Cinemark (HTTP BFF JSON API - 0 MB Chrome)...',
+    );
+    const locationsResult: ScrapedLocationResult[] = [];
 
     try {
-      const page = await browser.newPage();
-      await page.setViewport({ width: 1366, height: 768 });
-      
-      let totalMoviesScraped = 0;
+      const { data: theatersResponse } = await axios.get<{
+        data: CinemarkBffTheater[];
+      }>(`${this.bffBaseUrl}/cinema/theaters`, {
+        headers: { country: 'AR' },
+        timeout: 12000,
+      });
 
-      // ITERAMOS SOBRE TU ARCHIVO DE CONFIGURACIÓN (Con tus URLs verificadas)
-      for (const location of CINEMARK_LOCATIONS) {
-        this.logger.log(`\n🚀 Navegando a: ${location.name}...`);
-        
-        try {
-          // Usamos exactamente location.url sin modificar nada
-          await page.goto(location.url, { waitUntil: 'networkidle2' });
+      const theatersBySlug = new Map<string, number>();
+      for (const t of theatersResponse.data || []) {
+        if (t.slug && t.id) {
+          theatersBySlug.set(t.slug.toLowerCase(), t.id);
+        }
+      }
 
-          // ⏳ ESPERA INTELIGENTE: Obligamos a Puppeteer a esperar que aparezca al menos un <h1>
-          // Esto evita que el scraper lea la página vacía mientras carga el AJAX.
-          await page.waitForSelector('h1', { timeout: 10000 }).catch(() => {
-            this.logger.warn(`⚠️ Tiempo agotado esperando títulos en ${location.name}.`);
-          });
+      for (const locConfig of CINEMARK_LOCATIONS) {
+        const slug = locConfig.url.split('/').filter(Boolean).pop()?.toLowerCase();
+        const theaterId = slug ? theatersBySlug.get(slug) : undefined;
 
-          const extractedMovies = await page.evaluate((): ExtractedMovie[] => {
-            const results: ExtractedMovie[] = [];
-            const seenTitles = new Set<string>();
-            const titleElements = Array.from(document.querySelectorAll('h1'));
-
-            for (const h1 of titleElements) {
-              const title = h1.textContent?.replace(/"/g, '').trim();
-              if (!title || seenTitles.has(title)) continue;
-              seenTitles.add(title);
-
-              let container = h1.parentElement;
-              while (container && container.querySelectorAll('p').length === 0) {
-                container = container.parentElement;
-              }
-
-              if (!container) continue;
-
-              const paragraphs = Array.from(container.querySelectorAll('p'));
-              const showtimes: ExtractedShowtime[] = [];
-              let currentFormat = '';
-              let currentLanguage = '';
-
-              for (let i = 0; i < paragraphs.length; i++) {
-                const text = paragraphs[i].textContent?.trim() || '';
-
-                if (text === '2D' || text === '3D' || text === 'XD' || text.includes('D-BOX')) {
-                  currentFormat = text;
-                  const nextText = paragraphs[i + 1]?.textContent?.trim() || '';
-                  if (nextText.startsWith('·')) {
-                    currentLanguage = nextText.replace('·', '').trim();
-                    i++; 
-                  }
-                } 
-                else if (text.endsWith('hs')) {
-                  showtimes.push({
-                    time: text.replace('hs', ''), 
-                    format: currentFormat,
-                    language: currentLanguage
-                  });
-                }
-              }
-
-              if (showtimes.length > 0) {
-                results.push({ title, totalShowtimes: showtimes.length, showtimes });
-              }
-            }
-            return results;
-          });
-
-          this.logger.log(`✅ Extracción lista: ${extractedMovies.length} películas en ${location.name}.`);
-          totalMoviesScraped += extractedMovies.length;
-          
-          await this.saveMoviesToDB(location, extractedMovies);
-
-        } catch (cityError) {
-          this.logger.error(`❌ Falló la carga de ${location.name}: ${cityError}`);
+        if (!theaterId) {
+          this.logger.warn(
+            `No se encontró theaterId en BFF para ${locConfig.name} (slug: ${slug})`,
+          );
+          continue;
         }
 
-        this.logger.debug('Respirando 3 segundos para evadir bloqueos...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        try {
+          const { data: showtimesResponse } = await axios.get<{
+            data: CinemarkBffShowtime[];
+          }>(`${this.bffBaseUrl}/cinema/showtimes`, {
+            params: { theater: theaterId },
+            headers: { country: 'AR' },
+            timeout: 12000,
+          });
+
+          const sessions = showtimesResponse.data || [];
+          if (sessions.length === 0) continue;
+
+          const moviesMap = new Map<string, ScrapedMovieItem>();
+
+          for (const session of sessions) {
+            if (!session.movieName || !session.sessionDateTime) continue;
+
+            const cleanTitle = this.normalizer.normalize(session.movieName);
+            if (!cleanTitle) continue;
+
+            if (!moviesMap.has(cleanTitle)) {
+              moviesMap.set(cleanTitle, {
+                rawTitle: cleanTitle,
+                showtimes: [],
+              });
+            }
+
+            const datePart =
+              session.sessionDisplayDate ||
+              session.sessionDateTime.slice(0, 10);
+            const timePart = session.sessionDateTime.slice(11, 16);
+
+            const dateTime = buildArgentinaDate(datePart, timePart);
+            const format = this.normalizer.normalizeFormat(
+              session.sessionFormat,
+            );
+            const language = this.normalizer.normalizeLanguage(
+              session.language?.name || session.language?.shortName,
+            );
+
+            moviesMap.get(cleanTitle)!.showtimes.push({
+              dateTime,
+              format,
+              language,
+              ticketUrl: locConfig.url,
+            });
+          }
+
+          if (moviesMap.size > 0) {
+            locationsResult.push({
+              locationName: locConfig.name,
+              movies: Array.from(moviesMap.values()),
+            });
+          }
+        } catch (locErr: unknown) {
+          const msg = locErr instanceof Error ? locErr.message : String(locErr);
+          this.logger.error(`Error en ${locConfig.name}: ${msg}`);
+        }
       }
-
-      await browser.close();
-      return { success: true, message: `Scraping completo. ${totalMoviesScraped} carteleras procesadas.` };
-
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
-      this.logger.error(`❌ Error general: ${errorMessage}`);
-      await browser.close();
-      return { success: false, error: errorMessage };
-    }
-  }
-
-  private async saveMoviesToDB(locConfig: CinemarkLocationConfig, extractedMovies: ExtractedMovie[]) {
-    this.logger.log(`💾 Guardando horarios para ${locConfig.name}...`);
-
-    const chain = await this.prisma.cinemaChain.upsert({
-      where: { name: 'Cinemark' },
-      update: {},
-      create: { name: 'Cinemark' },
-    });
-
-    // Búsqueda segura por nombre y cadena
-    let location = await this.prisma.cinemaLocation.findFirst({
-      where: { name: locConfig.name, chainId: chain.id },
-    });
-
-    if (!location) {
-      location = await this.prisma.cinemaLocation.create({
-        data: { 
-          name: locConfig.name, 
-          address: locConfig.address, 
-          lat: locConfig.lat, 
-          lng: locConfig.lng,
-          chainId: chain.id 
-        },
-      });
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error general en Cinemark BFF: ${msg}`);
     }
 
-    const hoy = new Date();
-    const hoyString = hoy.toISOString().split('T')[0];
-
-    // Limpiamos solo las funciones de hoy para este cine específico
-    await this.prisma.showtime.deleteMany({
-      where: {
-        locationId: location.id,
-        dateTime: {
-          gte: new Date(`${hoyString}T00:00:00.000Z`),
-          lt: new Date(`${hoyString}T23:59:59.999Z`),
-        },
-      },
-    });
-
-    for (const movie of extractedMovies) {
-      const tmdbInfo = await this.tmdbService.searchMovie(movie.title);
-      if (!tmdbInfo || !tmdbInfo.tmdbId) continue;
-
-      const dbMovie = await this.prisma.movie.upsert({
-        where: { tmdbId: tmdbInfo.tmdbId },
-        update: { title: tmdbInfo.officialTitle, posterUrl: tmdbInfo.posterUrl },
-        create: { tmdbId: tmdbInfo.tmdbId, title: tmdbInfo.officialTitle, posterUrl: tmdbInfo.posterUrl },
-      });
-
-      // Mapeo estricto de horarios
-      const showtimesToCreate = movie.showtimes.map(st => {
-        const [horas, minutos] = st.time.split(':');
-        return {
-          movieId: dbMovie.id,
-          locationId: location.id,
-          dateTime: new Date(`${hoyString}T${horas}:${minutos}:00.000Z`),
-          format: st.format || '2D',
-          language: st.language || 'CASTELLANO',
-          ticketUrl: locConfig.url,
-        };
-      });
-
-      if (showtimesToCreate.length > 0) {
-        await this.prisma.showtime.createMany({ data: showtimesToCreate });
-      }
-    }
-    this.logger.log(`✅ ¡PostgreSQL sincronizado para ${locConfig.name}!`);
+    return {
+      chainName: this.chainName,
+      locations: locationsResult,
+    };
   }
 }

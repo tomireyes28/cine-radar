@@ -1,6 +1,7 @@
 export interface CinepolisLocationConfig {
   name: string;
   complexId: number;
+  graphqlSlug: string;
   url: string;
   address: string;
   zone: string;
@@ -14,7 +15,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Recoleta',
     complexId: 1,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-recoleta',
+    graphqlSlug: 'cinepolis-recoleta-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-recoleta-buenos-aires',
     address: 'Vicente López 2050',
     zone: 'CABA',
     city: 'CABA',
@@ -24,7 +26,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Houssay',
     complexId: 11,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-houssay',
+    graphqlSlug: 'cinepolis-houssay-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-houssay-buenos-aires',
     address: 'Av. Córdoba 2135',
     zone: 'CABA',
     city: 'CABA',
@@ -36,7 +39,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Avellaneda',
     complexId: 5,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-avellaneda',
+    graphqlSlug: 'cinepolis-avellaneda-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-avellaneda-buenos-aires',
     address: 'Autopista Bs.As.-La Plata Km 9',
     zone: 'GBA Sur',
     city: 'Avellaneda',
@@ -46,7 +50,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Pilar',
     complexId: 6,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-pilar',
+    graphqlSlug: 'cinepolis-pilar-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-pilar-buenos-aires',
     address: 'Panamericana Km 50',
     zone: 'GBA Norte',
     city: 'Pilar',
@@ -56,7 +61,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Merlo',
     complexId: 9,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-merlo',
+    graphqlSlug: 'cinepolis-merlo-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-merlo-buenos-aires',
     address: 'Av. Pres. Juan Domingo Perón 24098',
     zone: 'GBA Oeste',
     city: 'Merlo',
@@ -66,7 +72,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Luján',
     complexId: 10,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-lujan',
+    graphqlSlug: 'cinepolis-lujan-buenos-aires',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-lujan-buenos-aires',
     address: 'Tucumán 500',
     zone: 'GBA Oeste',
     city: 'Luján',
@@ -78,7 +85,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Rosario',
     complexId: 4,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-rosario',
+    graphqlSlug: 'cinepolis-rosario-santa-fe',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-rosario-santa-fe',
     address: 'Eva Perón 5856',
     zone: 'Interior',
     city: 'Rosario',
@@ -88,7 +96,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Mendoza Shopping',
     complexId: 3,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-mendoza',
+    graphqlSlug: 'cinepolis-mendoza-mendoza',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-mendoza-mendoza',
     address: 'Av. de Acceso Este 3280',
     zone: 'Interior',
     city: 'Mendoza',
@@ -98,7 +107,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Arena Maipú',
     complexId: 8,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-maipu',
+    graphqlSlug: 'cinepolis-maipu-mendoza',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-maipu-mendoza',
     address: 'Emilio Civit 791',
     zone: 'Interior',
     city: 'Mendoza',
@@ -108,7 +118,8 @@ export const CINEPOLIS_LOCATIONS: CinepolisLocationConfig[] = [
   {
     name: 'Cinépolis Neuquén',
     complexId: 2,
-    url: 'https://www.cinepolis.com.ar/cines/cinepolis-neuquen',
+    graphqlSlug: 'cinepolis-neuquen-neuquen',
+    url: 'https://cinepolis.com/ar?cinema=cinepolis-neuquen-neuquen',
     address: 'J. J. Lastra 2400',
     zone: 'Interior',
     city: 'Neuquén',

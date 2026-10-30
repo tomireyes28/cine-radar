@@ -1,7 +1,8 @@
-# nixpacks.toml
+# nixpacks.toml — Optimized lightweight production build for Railway (~50MB RAM)
+# Heavy scraping runs on GitHub Actions (.github/workflows/daily-scraper.yml)
 
 [phases.setup]
-nixPkgs = ["...", "google-chrome", "git"]
+nixPkgs = ["..."]
 
 [phases.build]
 cmds = ["npm ci", "npx prisma generate", "npm run build"]
@@ -10,5 +11,6 @@ cmds = ["npm ci", "npx prisma generate", "npm run build"]
 cmd = "npm run start:prod"
 
 [variables]
-PUPPETEER_EXECUTABLE_PATH = "/usr/bin/google-chrome-stable"
 PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+DISABLE_INTERNAL_CRON = "true"
+NODE_ENV = "production"
