@@ -95,6 +95,12 @@ const movieUrl = `/movie/${movie.id}${cinemaId ? `?cinemaId=${cinemaId}` : ''}`;
               {movie.title}
             </h3>
             
+            {!isUpcoming && (movie as Movie).cinemaCount ? (
+              <p className="text-xs text-zinc-400 mt-1 font-medium">
+                {(movie as Movie).cinemaCount} {(movie as Movie).cinemaCount === 1 ? 'cine' : 'cines'}
+              </p>
+            ) : null}
+
             {isUpcoming && formattedDate && (
               <p className="text-xs text-zinc-400 mt-1 font-medium">
                 {isReRelease ? 'Vuelve a los cines' : `Llega el ${formattedDate}`}

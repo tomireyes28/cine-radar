@@ -4,7 +4,7 @@ import { CalendarDays, Film } from 'lucide-react';
 
 // 1. Metadatos para SEO (Ideal para que indexe bien si lo subís a producción)
 export const metadata = {
-  title: 'Próximamente | CinemaApp',
+  title: 'Próximamente | Cine Radar',
   description: 'Descubrí los próximos estrenos de cine y preparate para lo que se viene en la pantalla grande.',
 };
 
@@ -13,7 +13,7 @@ export default async function ProximamentePage() {
   const movies = await getUpcomingMovies();
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-white pt-24 pb-24 md:pb-12 px-6">
+    <div className="px-4 md:px-6 pt-4">
       <div className="max-w-screen-2xl mx-auto"> 
         
         {/* --- CABECERA LIMPIA --- */}
@@ -55,6 +55,6 @@ export default async function ProximamentePage() {
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

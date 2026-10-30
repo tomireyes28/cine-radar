@@ -8,31 +8,28 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { MoviesModule } from './movies/movies.module';
 import { CronModule } from './cron/cron.module';
-
-// IMPORTS PARA SEGURIDAD
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
     ScheduleModule.forRoot(),
-    ConfigModule.forRoot(),
+    ConfigModule.forRoot({ isGlobal: true }),
     TmdbModule,
     ScraperModule,
     PrismaModule,
     MoviesModule,
     CronModule,
-    
-    // CONFIGURACIÓN DE RATE LIMITING (100 peticiones por minuto)
-    ThrottlerModule.forRoot([{
-      ttl: 60000,
-      limit: 100,
-    }]),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000,
+        limit: 100,
+      },
+    ]),
   ],
   controllers: [AppController],
   providers: [
     AppService,
-    // ESTO ES LO QUE TE FALTABA: Activar la protección globalmente
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,

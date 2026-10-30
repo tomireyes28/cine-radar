@@ -1,16 +1,23 @@
-import { getNowPlaying } from "@/lib/api";
-import MovieDashboard from "@/components/movies/MovieDashboard";
+import { getCinemas, getNowPlaying } from '@/lib/api';
+import MovieDashboard from '@/components/movies/MovieDashboard';
+import BillboardFilters from '@/components/movies/BillboardFilters';
 
-// Revalidamos los datos cada 60 segundos para tener cartelera fresca
-export const revalidate = 60;
+const ZONES = ['CABA', 'GBA Norte', 'GBA Oeste', 'GBA Sur', 'Interior'];
 
-export default async function Home() {
-  const movies = await getNowPlaying();
+interface HomeProps {
+  searchParams: Promise<{ zone?: string; chainId?: string }>;
+}
+
+export default async function Home({ searchParams }: HomeProps) {
+  const { zone, chainId } = await searchParams;
+
+  const [movies, chains] = await Promise.all([
+    getNowPlaying({ zone, chainId }),
+    getCinemas(),
+  ]);
 
   return (
-    <main className="container mx-auto px-4 md:px-6">
-      
-      {/* Hero Title */}
+    <div className="container mx-auto px-4 md:px-6">
       <section className="mt-8 md:mt-12 mb-6 text-center md:text-left">
         <h1 className="text-3xl md:text-5xl font-bold bg-linear-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent mb-2">
           En Cartelera
@@ -20,9 +27,12 @@ export default async function Home() {
         </p>
       </section>
 
-      {/* Dashboard Interactivo (Buscador + Grid) */}
-      <MovieDashboard initialMovies={movies} />
+      <BillboardFilters
+        zones={ZONES}
+        chains={(chains ?? []).map(({ id, name }) => ({ id, name }))}
+      />
 
-    </main>
+      <MovieDashboard initialMovies={movies} />
+    </div>
   );
 }

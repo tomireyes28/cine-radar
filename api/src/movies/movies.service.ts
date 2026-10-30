@@ -1,31 +1,49 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { startOfDay, endOfDay, parseISO } from 'date-fns';
-import { Movie, CinemaChain } from '@prisma/client';
-import { 
-  MovieFilters, 
-  GroupedShowtimes, 
-  MovieDetailResponse 
-} from './movies.interface'; 
+import { CinemaChain } from '@prisma/client';
+import {
+  MovieFilters,
+  GroupedShowtimes,
+  MovieDetailResponse,
+  NowPlayingMovieItem,
+} from './movies.interface';
 import { TmdbService } from '../tmdb/tmdb.service';
 
 @Injectable()
 export class MoviesService {
-  constructor(private readonly prisma: PrismaService, private readonly tmdbService: TmdbService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tmdbService: TmdbService,
+  ) {}
 
-  // 1. Obtener Cartelera
-  async getNowPlaying(filters: MovieFilters): Promise<Movie[]> {
-    const { date, city, chainId, cinemaId } = filters;
+  private getArgentinaDayRange(dateStr?: string): { start: Date; end: Date } {
+    const cleanDate =
+      dateStr && /^\d{4}-\d{2}-\d{2}/.test(dateStr)
+        ? dateStr.slice(0, 10)
+        : new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Argentina/Buenos_Aires',
+          }).format(new Date());
 
-    const queryDate = date ? parseISO(date) : new Date();
-    const start = startOfDay(queryDate);
-    const end = endOfDay(queryDate);
+    const start = new Date(`${cleanDate}T00:00:00.000-03:00`);
+    const end = new Date(`${cleanDate}T23:59:59.999-03:00`);
+    return { start, end };
+  }
 
-    // Parseo seguro de números (evita pasar undefined a parseInt)
+  async getNowPlaying(filters: MovieFilters): Promise<NowPlayingMovieItem[]> {
+    const { date, city, zone, chainId, cinemaId } = filters;
+    const { start, end } = this.getArgentinaDayRange(date);
+
     const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
     const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
 
-    return this.prisma.movie.findMany({
+    const locationWhere = {
+      name: city ? { contains: city, mode: 'insensitive' as const } : undefined,
+      zone: zone ? { equals: zone, mode: 'insensitive' as const } : undefined,
+      chainId: parsedChainId,
+      id: parsedCinemaId,
+    };
+
+    const movies = await this.prisma.movie.findMany({
       where: {
         showtimes: {
           some: {
@@ -33,30 +51,84 @@ export class MoviesService {
               gte: start,
               lte: end,
             },
-            location: {
-              name: city ? { contains: city, mode: 'insensitive' } : undefined,
-              chainId: parsedChainId,
-              id: parsedCinemaId,
-            },
+            location: locationWhere,
           },
         },
       },
       include: {
         showtimes: {
-          take: 1,
+          where: {
+            dateTime: {
+              gte: start,
+              lte: end,
+            },
+            location: locationWhere,
+          },
           orderBy: { dateTime: 'asc' },
-          where: { dateTime: { gte: new Date() } },
+          include: {
+            location: {
+              select: {
+                id: true,
+                zone: true,
+                chain: {
+                  select: { name: true },
+                },
+              },
+            },
+          },
         },
       },
     });
+
+    const enriched: NowPlayingMovieItem[] = movies.map((movie) => {
+      const locationIds = new Set<number>();
+      const chainNames = new Set<string>();
+      const zones = new Set<string>();
+      const formats = new Set<string>();
+
+      for (const st of movie.showtimes) {
+        locationIds.add(st.locationId);
+        if (st.location?.chain?.name) chainNames.add(st.location.chain.name);
+        if (st.location?.zone) zones.add(st.location.zone);
+        if (st.format) formats.add(st.format);
+      }
+
+      const now = new Date();
+      const nextShowtime =
+        movie.showtimes.find((st) => st.dateTime >= now) || movie.showtimes[0];
+
+      const { showtimes: _, ...movieFields } = movie;
+
+      return {
+        ...movieFields,
+        cinemaCount: locationIds.size,
+        chainNames: Array.from(chainNames),
+        zones: Array.from(zones),
+        formats: Array.from(formats),
+        showtimes: nextShowtime
+          ? [
+              {
+                id: nextShowtime.id,
+                dateTime: nextShowtime.dateTime,
+                format: nextShowtime.format,
+                language: nextShowtime.language,
+                ticketUrl: nextShowtime.ticketUrl,
+              },
+            ]
+          : [],
+      };
+    });
+
+    // Sort by availability (movies playing in more cinemas appear first)
+    return enriched.sort((a, b) => b.cinemaCount - a.cinemaCount);
   }
 
-  // 2. Obtener Detalle + Funciones Agrupadas
-  async getMovieDetail(id: number, filters: MovieFilters): Promise<MovieDetailResponse | null> {
-    const { date, city } = filters;
-    const queryDate = date ? parseISO(date) : new Date();
-    const start = startOfDay(queryDate);
-    const end = endOfDay(queryDate);
+  async getMovieDetail(
+    id: number,
+    filters: MovieFilters,
+  ): Promise<MovieDetailResponse | null> {
+    const { date, city, zone } = filters;
+    const { start, end } = this.getArgentinaDayRange(date);
 
     const movie = await this.prisma.movie.findUnique({
       where: { id },
@@ -73,6 +145,7 @@ export class MoviesService {
         },
         location: {
           name: city ? { contains: city, mode: 'insensitive' } : undefined,
+          zone: zone ? { equals: zone, mode: 'insensitive' } : undefined,
         },
       },
       include: {
@@ -85,29 +158,29 @@ export class MoviesService {
       },
     });
 
-    // Reduce tipado explícitamente
-    const showtimesByCinema = showtimes.reduce<GroupedShowtimes>((acc, show) => {
-      const cinemaName = show.location.name;
+    const showtimesByCinema = showtimes.reduce<GroupedShowtimes>(
+      (acc, show) => {
+        const cinemaName = show.location.name;
 
-      // Si no existe la entrada en el acumulador, la inicializamos
-      if (!acc[cinemaName]) {
-        acc[cinemaName] = {
-          cinema: show.location,
-          functions: [],
-        };
-      }
+        if (!acc[cinemaName]) {
+          acc[cinemaName] = {
+            cinema: show.location,
+            functions: [],
+          };
+        }
 
-      // Agregamos la función al array
-      acc[cinemaName].functions.push({
-        id: show.id,
-        time: show.dateTime,
-        format: show.format,
-        language: show.language,
-        url: show.ticketUrl,
-      });
+        acc[cinemaName].functions.push({
+          id: show.id,
+          time: show.dateTime,
+          format: show.format,
+          language: show.language,
+          url: show.ticketUrl,
+        });
 
-      return acc;
-    }, {});
+        return acc;
+      },
+      {},
+    );
 
     return {
       ...movie,
@@ -115,40 +188,47 @@ export class MoviesService {
     };
   }
 
-  // 3. Filtros
   async getFiltersData(): Promise<CinemaChain[]> {
     return this.prisma.cinemaChain.findMany({
-      include: { locations: true },
+      include: {
+        locations: {
+          orderBy: { name: 'asc' },
+        },
+      },
+      orderBy: { name: 'asc' },
     });
   }
 
-  // 4. Próximos Estrenos
   async getUpcomingMovies() {
     const rawMovies = await this.tmdbService.getUpcomingMovies();
-    const today = new Date().toISOString().split('T')[0]; // Ej: "2026-02-28"
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Argentina/Buenos_Aires',
+    }).format(new Date());
 
-    const cleanedMovies = rawMovies.map(movie => {
-      // Si la fecha original es anterior a hoy, es un reestreno
-      const isReRelease = movie.release_date && movie.release_date < today;
+    const cleanedMovies = rawMovies.map((movie) => {
+      const isReRelease = Boolean(
+        movie.release_date && movie.release_date < today,
+      );
 
       return {
         id: movie.id,
         title: movie.title,
-        posterUrl: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
+        posterUrl: movie.poster_path
+          ? `https://image.tmdb.org/t/p/w500${movie.poster_path}`
+          : null,
         releaseDate: movie.release_date,
-        overview: movie.overview,
-        isReRelease, // ✅ Pasamos esta nueva propiedad al front
+        overview: movie.overview || '',
+        isReRelease,
       };
     });
 
-    // Ordenamos inteligentemente:
     return cleanedMovies.sort((a, b) => {
-      // Si ambas son estrenos o ambas reestrenos, ordenamos por fecha
       if (a.isReRelease === b.isReRelease) {
-        return new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime();
+        return (
+          new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime()
+        );
       }
-      // Si una es reestreno, la mandamos al final de la lista (devuelve 1)
-      return a.isReRelease ? 1 : -1; 
+      return a.isReRelease ? 1 : -1;
     });
   }
 }

@@ -9,8 +9,8 @@ import { Movie } from '@/types/movie';
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params; // 👈 Desembocamos la promesa aquí
   const cinema = await getCinemaById(id);
-  if (!cinema) return { title: 'Cine no encontrado | CinemaApp' };
-  return { title: `${cinema.name} | CinemaApp` };
+  if (!cinema) return { title: 'Cine no encontrado | Cine Radar' };
+  return { title: `${cinema.name} | Cine Radar` };
 }
 
 export default async function CinemaDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -32,7 +32,7 @@ export default async function CinemaDetailPage({ params }: { params: Promise<{ i
     : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${cinema.name} ${cinema.address}`)}`;
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-white pt-24 pb-24 md:pb-12 px-6">
+    <div className="px-4 md:px-6 pt-4">
       <div className="max-w-screen-2xl mx-auto">
         
         {/* --- BREADCRUMBS --- */}
@@ -105,6 +105,6 @@ export default async function CinemaDetailPage({ params }: { params: Promise<{ i
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

@@ -8,14 +8,34 @@ async function bootstrap() {
 
   app.use(helmet());
 
-  // 🔒 CORS BLINDADO: Solo tu Frontend puede pedir datos
+  const configuredOrigins = (process.env.FRONTEND_URL || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const allowedOrigins = Array.from(
+    new Set([
+      'https://cinema-agenda-app.vercel.app',
+      'http://localhost:3000',
+      ...configuredOrigins,
+    ]),
+  );
+
   app.enableCors({
-    origin: [
-      'https://cinema-agenda-app.vercel.app', // Tu producción
-      'http://localhost:3000' // Para que puedas seguir probando en tu PC sin romper nada
-    ],
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true, // Ahora sí podés poner true porque el origen es específico
+    origin: (origin, callback) => {
+      // Allow server-to-server requests (no Origin header) or whitelisted origins
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.endsWith('.vercel.app')
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin ${origin} not allowed by CORS`));
+      }
+    },
+    methods: 'GET,HEAD,POST,OPTIONS',
+    credentials: true,
   });
 
   app.useGlobalPipes(
@@ -29,8 +49,7 @@ async function bootstrap() {
     }),
   );
 
-  // Puerto dinámico de Railway
   await app.listen(process.env.PORT || 3000);
-  console.log(`Application is running on: ${await app.getUrl()}`);
+  console.log(`Cine Radar API running on: ${await app.getUrl()}`);
 }
 bootstrap();

@@ -1,8 +1,13 @@
-import { IsOptional, IsString, IsNumberString, IsISO8601 } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsNumberString,
+  IsISO8601,
+} from 'class-validator';
 
 export class GetMoviesDto {
   @IsOptional()
-  @IsISO8601() // Valida que sea una fecha real (YYYY-MM-DD)
+  @IsISO8601()
   date?: string;
 
   @IsOptional()
@@ -10,7 +15,11 @@ export class GetMoviesDto {
   city?: string;
 
   @IsOptional()
-  @IsNumberString() // Valida que sea un string numérico ("123")
+  @IsString()
+  zone?: string;
+
+  @IsOptional()
+  @IsNumberString()
   chainId?: string;
 
   @IsOptional()
