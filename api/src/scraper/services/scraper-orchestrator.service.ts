@@ -225,33 +225,44 @@ export class ScraperOrchestratorService {
     }
 
     const tmdbInfo = await this.tmdbService.searchMovie(rawTitle);
-    if (!tmdbInfo || !tmdbInfo.tmdbId) {
-      cache.set(key, null);
-      return null;
-    }
+
+    // Fallback: If not indexed on TMDB (indie, festival, or local film), use a deterministic synthetic ID
+    const syntheticId = -Math.abs(
+      key.split('').reduce((acc, char) => (acc * 31 + char.charCodeAt(0)) | 0, 0) || 1,
+    );
+
+    const resolvedTmdbId = tmdbInfo?.tmdbId ?? syntheticId;
+    const resolvedTitle = tmdbInfo?.officialTitle ?? rawTitle;
+    const resolvedPoster = tmdbInfo?.posterUrl ?? null;
+    const resolvedBackdrop = tmdbInfo?.backdropUrl ?? null;
+    const resolvedOverview = tmdbInfo?.overview ?? '';
+    const resolvedReleaseDate = tmdbInfo?.releaseDate ?? null;
+    const resolvedDuration = tmdbInfo?.duration ?? null;
+    const resolvedRating = tmdbInfo?.rating ?? null;
+    const resolvedGenres = tmdbInfo?.genres ?? [];
 
     const dbMovie = await this.prisma.movie.upsert({
-      where: { tmdbId: tmdbInfo.tmdbId },
+      where: { tmdbId: resolvedTmdbId },
       update: {
-        title: tmdbInfo.officialTitle,
-        posterUrl: tmdbInfo.posterUrl,
-        backdropUrl: tmdbInfo.backdropUrl,
-        overview: tmdbInfo.overview,
-        releaseDate: tmdbInfo.releaseDate,
-        duration: tmdbInfo.duration,
-        rating: tmdbInfo.rating,
-        genres: tmdbInfo.genres,
+        title: resolvedTitle,
+        posterUrl: resolvedPoster,
+        backdropUrl: resolvedBackdrop,
+        overview: resolvedOverview,
+        releaseDate: resolvedReleaseDate,
+        duration: resolvedDuration,
+        rating: resolvedRating,
+        genres: resolvedGenres,
       },
       create: {
-        tmdbId: tmdbInfo.tmdbId,
-        title: tmdbInfo.officialTitle,
-        posterUrl: tmdbInfo.posterUrl,
-        backdropUrl: tmdbInfo.backdropUrl,
-        overview: tmdbInfo.overview,
-        releaseDate: tmdbInfo.releaseDate,
-        duration: tmdbInfo.duration,
-        rating: tmdbInfo.rating,
-        genres: tmdbInfo.genres,
+        tmdbId: resolvedTmdbId,
+        title: resolvedTitle,
+        posterUrl: resolvedPoster,
+        backdropUrl: resolvedBackdrop,
+        overview: resolvedOverview,
+        releaseDate: resolvedReleaseDate,
+        duration: resolvedDuration,
+        rating: resolvedRating,
+        genres: resolvedGenres,
       },
     });
 

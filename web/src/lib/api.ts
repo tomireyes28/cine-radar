@@ -90,8 +90,11 @@ export async function getUpcomingMovies(): Promise<UpcomingMovie[]> {
   return data ?? [];
 }
 
-export async function getMoviesForCinema(cinemaId: string): Promise<Movie[]> {
-  return getNowPlaying({ cinemaId });
+export async function getMoviesForCinema(
+  cinemaId: string,
+  date?: string,
+): Promise<Movie[]> {
+  return getNowPlaying({ cinemaId, date });
 }
 
 export async function getNearbyCinemas(lat: string, lng: string) {

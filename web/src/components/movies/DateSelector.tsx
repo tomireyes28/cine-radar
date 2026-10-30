@@ -8,11 +8,18 @@ import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
 import { buildDateRange, getTodayArgentina } from '@/lib/dates';
 
-export default function DateSelector({ movieId }: { movieId: number }) {
+interface DateSelectorProps {
+  movieId?: number;
+  baseUrl?: string;
+}
+
+export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
   const searchParams = useSearchParams();
 
   const selectedDate = searchParams.get('date') ?? getTodayArgentina();
   const days = buildDateRange(7);
+
+  const targetBase = baseUrl ?? (movieId ? `/movie/${movieId}` : '');
 
   return (
     <div className="w-full overflow-x-auto pb-4 pt-2 no-scrollbar">
@@ -28,14 +35,14 @@ export default function DateSelector({ movieId }: { movieId: number }) {
                 ? 'MAÑANA'
                 : format(date, 'EEE', { locale: es }).toUpperCase();
 
-          // Preserve other filters (e.g. cinemaId) when switching day
+          // Preserve other query parameters when switching day
           const params = new URLSearchParams(searchParams.toString());
           params.set('date', dateString);
 
           return (
             <Link
               key={dateString}
-              href={`/movie/${movieId}?${params.toString()}`}
+              href={`${targetBase}?${params.toString()}`}
               scroll={false}
               className="relative"
             >

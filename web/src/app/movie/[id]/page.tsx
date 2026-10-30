@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Clock, MapPin, Star, Ticket } from 'lucide-react';
+import { clsx } from 'clsx';
 import { getMovieDetail } from '@/lib/api';
 import { formatTimeAR, getTodayArgentina } from '@/lib/dates';
 import DateSelector from '@/components/movies/DateSelector';
@@ -17,9 +18,40 @@ interface PageProps {
 export async function generateMetadata({ params }: Pick<PageProps, 'params'>) {
   const { id } = await params;
   const movie = await getMovieDetail(id);
+  if (!movie) {
+    return {
+      title: 'Película no encontrada | Cine Radar',
+      description: 'La función solicitada no está disponible en cartelera.',
+    };
+  }
+
+  const heroImage = movie.backdropUrl || movie.posterUrl || '/logo.png';
+  const description =
+    movie.overview ||
+    `Cartelera, horarios y cines para ver ${movie.title} en Argentina.`;
+
   return {
-    title: movie ? `${movie.title} | Cine Radar` : 'Película no encontrada | Cine Radar',
-    description: movie?.overview ?? undefined,
+    title: `${movie.title} | Cartelera y Horarios | Cine Radar`,
+    description,
+    openGraph: {
+      title: `${movie.title} | Cine Radar`,
+      description,
+      images: [
+        {
+          url: heroImage,
+          width: 1200,
+          height: 630,
+          alt: movie.title,
+        },
+      ],
+      type: 'video.movie',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${movie.title} | Cine Radar`,
+      description,
+      images: [heroImage],
+    },
   };
 }
 
@@ -64,6 +96,8 @@ export default async function MovieDetailPage({
 
   const heroImage = movie.backdropUrl ?? movie.posterUrl;
   const releaseYear = movie.releaseDate?.slice(0, 4);
+  const isViewingToday = selectedDate === getTodayArgentina();
+  const now = new Date();
 
   return (
     <div className="text-zinc-100 pb-20">
@@ -79,84 +113,92 @@ export default async function MovieDetailPage({
             priority
           />
         ) : (
-          <div className="absolute inset-0 bg-linear-to-br from-violet-950 to-zinc-950" />
+          <div className="w-full h-full bg-zinc-900" />
         )}
-        <div className="absolute inset-0 bg-linear-to-b from-zinc-950/40 via-zinc-950/70 to-zinc-950" />
-
-        <div className="absolute bottom-0 left-0 w-full pb-8 z-10">
-          <div className="container mx-auto px-4 md:px-6 flex flex-col md:flex-row gap-6 items-end">
-            <div className="relative w-32 md:w-56 aspect-2/3 rounded-xl overflow-hidden shadow-2xl border border-white/10 mx-auto md:mx-0 shrink-0 bg-zinc-800">
-              {movie.posterUrl ? (
-                <Image
-                  src={movie.posterUrl}
-                  alt={movie.title}
-                  fill
-                  sizes="(max-width: 768px) 128px, 224px"
-                  className="object-cover"
-                />
-              ) : (
-                <div className="flex items-center justify-center h-full text-zinc-500 text-sm">
-                  Sin póster
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 text-center md:text-left mb-2 md:mb-4">
-              <h1 className="text-3xl md:text-5xl font-black text-white drop-shadow-lg mb-3 leading-tight">
-                {movie.title}
-              </h1>
-
-              <div className="flex flex-wrap items-center justify-center md:justify-start gap-x-4 gap-y-2 text-sm text-zinc-300 mb-4">
-                {releaseYear && <span>{releaseYear}</span>}
-                {movie.duration ? (
-                  <span className="flex items-center gap-1">
-                    <Clock size={14} /> {movie.duration} min
-                  </span>
-                ) : null}
-                {movie.rating && Number(movie.rating) > 0 ? (
-                  <span className="flex items-center gap-1">
-                    <Star size={14} className="text-amber-400" /> {movie.rating}
-                  </span>
-                ) : null}
-              </div>
-
-              {movie.genres && movie.genres.length > 0 && (
-                <div className="flex flex-wrap justify-center md:justify-start gap-2 mb-4">
-                  {movie.genres.map((genre) => (
-                    <span
-                      key={genre}
-                      className="px-2.5 py-1 text-xs rounded-full bg-white/10 border border-white/10"
-                    >
-                      {genre}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {movie.overview && (
-                <p className="text-zinc-300 text-sm md:text-base max-w-3xl text-pretty line-clamp-4">
-                  {movie.overview}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
+        <div className="absolute inset-0 bg-linear-to-t from-background via-background/60 to-transparent" />
       </div>
 
-      {/* Showtimes */}
-      <div className="container mx-auto px-4 md:px-6 mt-8">
-        <div className="mb-8 flex flex-col md:flex-row gap-4 md:items-end bg-zinc-900/30 p-4 rounded-2xl border border-white/5">
+      <div className="container mx-auto px-4 md:px-6 -mt-36 md:-mt-48 relative z-10">
+        {/* Info header */}
+        <div className="flex flex-col md:flex-row gap-6 md:gap-8 items-start mb-10">
+          {movie.posterUrl ? (
+            <div className="relative w-36 md:w-56 aspect-2/3 rounded-xl overflow-hidden shadow-2xl border border-white/10 shrink-0 mx-auto md:mx-0">
+              <Image
+                src={movie.posterUrl}
+                alt={movie.title}
+                fill
+                sizes="(max-width: 768px) 144px, 224px"
+                className="object-cover"
+                priority
+              />
+            </div>
+          ) : null}
+
+          <div className="flex-1 space-y-3">
+            <h1 className="text-3xl md:text-5xl font-extrabold text-white tracking-tight">
+              {movie.title}
+            </h1>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs md:text-sm text-zinc-400">
+              {releaseYear && (
+                <span className="px-2.5 py-0.5 rounded-full bg-zinc-800 text-zinc-300 font-medium">
+                  {releaseYear}
+                </span>
+              )}
+              {movie.duration ? (
+                <span className="flex items-center gap-1">
+                  <Clock size={14} className="text-violet-400" />
+                  {movie.duration} min
+                </span>
+              ) : null}
+              {movie.rating ? (
+                <span className="flex items-center gap-1 font-semibold text-amber-400">
+                  <Star size={14} className="fill-amber-400 text-amber-400" />
+                  {movie.rating}
+                </span>
+              ) : null}
+            </div>
+
+            {movie.genres && movie.genres.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {movie.genres.map((genre) => (
+                  <span
+                    key={genre}
+                    className="px-2.5 py-0.5 text-xs rounded-full bg-violet-950/60 text-violet-300 border border-violet-800/40"
+                  >
+                    {genre}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {movie.overview && (
+              <p className="text-zinc-300 text-sm md:text-base leading-relaxed max-w-3xl pt-2">
+                {movie.overview}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Date and cinema filters */}
+        <div className="space-y-4 mb-8">
           <div>
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 font-bold mb-2 ml-1">
-              Elegí tu día
-            </h2>
+            <p className="text-xs uppercase tracking-wider text-zinc-400 font-bold mb-2">
+              Día
+            </p>
             <DateSelector movieId={movie.id} />
           </div>
 
-          <div className="md:ml-auto w-full md:w-auto mt-2 md:mt-0">
-            <h2 className="text-xs uppercase tracking-widest text-zinc-500 font-bold mb-2 ml-1">
-              Filtrar por cine
-            </h2>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+            <div>
+              <p className="text-xs uppercase tracking-wider text-zinc-400 font-bold mb-1">
+                Filtrar por complejo
+              </p>
+              <p className="text-xs text-zinc-500">
+                {movie.cinemas.length}{' '}
+                {movie.cinemas.length === 1 ? 'complejo disponible' : 'complejos disponibles'}
+              </p>
+            </div>
             <CinemaSelector cinemas={allCinemasList} movieId={movie.id} />
           </div>
         </div>
@@ -203,24 +245,41 @@ export default async function MovieDetailPage({
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {group.functions.map((show) => (
-                    <a
-                      key={show.id}
-                      href={show.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-zinc-800 hover:bg-violet-600 text-zinc-300 hover:text-white rounded-lg px-4 py-2 transition-all duration-300 flex flex-col items-center min-w-20"
-                    >
-                      <span className="text-lg font-bold">
-                        {formatTimeAR(show.time)}
-                      </span>
-                      <div className="flex gap-1 text-[10px] font-medium uppercase tracking-wide opacity-70">
-                        <span>{show.format}</span>
-                        <span>•</span>
-                        <span>{show.language.substring(0, 3)}</span>
-                      </div>
-                    </a>
-                  ))}
+                  {group.functions.map((show) => {
+                    const isPast = isViewingToday && new Date(show.time) < now;
+
+                    return (
+                      <a
+                        key={show.id}
+                        href={isPast ? undefined : show.url || '#'}
+                        target={isPast ? undefined : '_blank'}
+                        rel={isPast ? undefined : 'noopener noreferrer'}
+                        aria-disabled={isPast}
+                        className={clsx(
+                          'rounded-lg px-4 py-2 transition-all duration-300 flex flex-col items-center min-w-20',
+                          isPast
+                            ? 'bg-zinc-900/40 border border-zinc-800 text-zinc-600 cursor-not-allowed opacity-45'
+                            : 'bg-zinc-800 hover:bg-violet-600 text-zinc-300 hover:text-white cursor-pointer shadow-sm',
+                        )}
+                        title={isPast ? 'Función ya finalizada' : 'Comprar entradas'}
+                      >
+                        <span
+                          className={clsx(
+                            'text-lg font-bold',
+                            isPast && 'line-through decoration-zinc-700',
+                          )}
+                        >
+                          {formatTimeAR(show.time)}
+                        </span>
+                        <div className="flex gap-1 text-[10px] font-medium uppercase tracking-wide opacity-70">
+                          <span>{show.format}</span>
+                          <span>•</span>
+                          <span>{show.language.substring(0, 3)}</span>
+                          {isPast && <span>(Fin)</span>}
+                        </div>
+                      </a>
+                    );
+                  })}
                 </div>
               </div>
             ))

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CinemaChain } from '@prisma/client';
 import {
@@ -9,12 +9,42 @@ import {
 } from './movies.interface';
 import { TmdbService } from '../tmdb/tmdb.service';
 
+interface CacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
 @Injectable()
 export class MoviesService {
+  private readonly logger = new Logger(MoviesService.name);
+  private readonly cache = new Map<string, CacheEntry<unknown>>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly tmdbService: TmdbService,
   ) {}
+
+  private getFromCache<T>(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.data as T;
+  }
+
+  private setInCache<T>(key: string, data: T, ttlSeconds: number): void {
+    // Limit cache size to 500 keys to prevent unbounded memory growth
+    if (this.cache.size > 500) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+    this.cache.set(key, {
+      data,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
+  }
 
   private getArgentinaDayRange(dateStr?: string): { start: Date; end: Date } {
     const cleanDate =
@@ -30,6 +60,10 @@ export class MoviesService {
   }
 
   async getNowPlaying(filters: MovieFilters): Promise<NowPlayingMovieItem[]> {
+    const cacheKey = `now-playing:${filters.date || 'today'}:${filters.city || ''}:${filters.zone || ''}:${filters.chainId || ''}:${filters.cinemaId || ''}`;
+    const cached = this.getFromCache<NowPlayingMovieItem[]>(cacheKey);
+    if (cached) return cached;
+
     const { date, city, zone, chainId, cinemaId } = filters;
     const { start, end } = this.getArgentinaDayRange(date);
 
@@ -120,14 +154,18 @@ export class MoviesService {
     });
 
     // Sort by availability (movies playing in more cinemas appear first)
-    return enriched.sort((a, b) => b.cinemaCount - a.cinemaCount);
+    const result = enriched.sort((a, b) => b.cinemaCount - a.cinemaCount);
+
+    // Cache for 3 minutes (180s)
+    this.setInCache(cacheKey, result, 180);
+    return result;
   }
 
   async getMovieDetail(
     id: number,
     filters: MovieFilters,
   ): Promise<MovieDetailResponse | null> {
-    const { date, city, zone } = filters;
+    const { date, city, zone, chainId, cinemaId } = filters;
     const { start, end } = this.getArgentinaDayRange(date);
 
     const movie = await this.prisma.movie.findUnique({
@@ -135,6 +173,9 @@ export class MoviesService {
     });
 
     if (!movie) return null;
+
+    const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
+    const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
 
     const showtimes = await this.prisma.showtime.findMany({
       where: {
@@ -146,6 +187,8 @@ export class MoviesService {
         location: {
           name: city ? { contains: city, mode: 'insensitive' } : undefined,
           zone: zone ? { equals: zone, mode: 'insensitive' } : undefined,
+          chainId: parsedChainId,
+          id: parsedCinemaId,
         },
       },
       include: {
@@ -189,7 +232,11 @@ export class MoviesService {
   }
 
   async getFiltersData(): Promise<CinemaChain[]> {
-    return this.prisma.cinemaChain.findMany({
+    const cacheKey = 'cinemas:filters';
+    const cached = this.getFromCache<CinemaChain[]>(cacheKey);
+    if (cached) return cached;
+
+    const chains = await this.prisma.cinemaChain.findMany({
       include: {
         locations: {
           orderBy: { name: 'asc' },
@@ -197,9 +244,17 @@ export class MoviesService {
       },
       orderBy: { name: 'asc' },
     });
+
+    // Cache for 10 minutes (600s)
+    this.setInCache(cacheKey, chains, 600);
+    return chains;
   }
 
   async getUpcomingMovies() {
+    const cacheKey = 'movies:upcoming';
+    const cached = this.getFromCache<any[]>(cacheKey);
+    if (cached) return cached;
+
     const rawMovies = await this.tmdbService.getUpcomingMovies();
     const today = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Argentina/Buenos_Aires',
@@ -222,7 +277,7 @@ export class MoviesService {
       };
     });
 
-    return cleanedMovies.sort((a, b) => {
+    const result = cleanedMovies.sort((a, b) => {
       if (a.isReRelease === b.isReRelease) {
         return (
           new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime()
@@ -230,5 +285,9 @@ export class MoviesService {
       }
       return a.isReRelease ? 1 : -1;
     });
+
+    // Cache for 30 minutes (1800s)
+    this.setInCache(cacheKey, result, 1800);
+    return result;
   }
 }
