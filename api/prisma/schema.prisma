@@ -1,49 +1,68 @@
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Movie {
   id          Int        @id @default(autoincrement())
-  tmdbId      Int        @unique 
+  tmdbId      Int        @unique
   title       String
   posterUrl   String?
-  duration    Int?       
-  rating      String?    
+  backdropUrl String?
+  overview    String?
+  releaseDate String?
+  duration    Int?
+  rating      String?
+  genres      String[]   @default([])
   showtimes   Showtime[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 }
 
 model CinemaChain {
   id        Int              @id @default(autoincrement())
-  name      String           @unique 
+  name      String           @unique
   logoUrl   String?
   locations CinemaLocation[]
 }
 
 model CinemaLocation {
-  id        Int         @id @default(autoincrement())
-  name      String      
-  address   String
-  lat       Float       
-  lng       Float       
-  chainId   Int
-  chain     CinemaChain @relation(fields: [chainId], references: [id])
-  showtimes Showtime[]
+  id         Int         @id @default(autoincrement())
+  name       String
+  address    String
+  zone       String      @default("CABA")
+  city       String      @default("Buenos Aires")
+  lat        Float
+  lng        Float
+  externalId String?
+  url        String?
+  chainId    Int
+  chain      CinemaChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+  showtimes  Showtime[]
+
+  @@unique([name, chainId])
+  @@index([chainId])
+  @@index([zone])
 }
 
 model Showtime {
   id         Int            @id @default(autoincrement())
   movieId    Int
-  movie      Movie          @relation(fields: [movieId], references: [id])
+  movie      Movie          @relation(fields: [movieId], references: [id], onDelete: Cascade)
   locationId Int
-  location   CinemaLocation @relation(fields: [locationId], references: [id])
-  dateTime   DateTime       
-  format     String         
-  language   String         
-  ticketUrl  String         
+  location   CinemaLocation @relation(fields: [locationId], references: [id], onDelete: Cascade)
+  dateTime   DateTime
+  format     String
+  language   String
+  ticketUrl  String
+
+  @@unique([movieId, locationId, dateTime, format, language])
+  @@index([dateTime])
+  @@index([movieId, dateTime])
+  @@index([locationId, dateTime])
 }
