@@ -78,12 +78,25 @@ describe('Strict Calendar Date, Positive Int4 & Coordinate Validation (F10)', ()
     }
   });
 
-  it('validates route :id parameter via PositiveIntPipe within 1..2147483647', () => {
+  it('validates route :id parameter via PositiveIntPipe for both raw strings and ValidationPipe-coerced numbers within 1..2147483647', () => {
     const pipe = new PositiveIntPipe();
     expect(pipe.transform('1')).toBe(1);
+    expect(pipe.transform(42)).toBe(42);
     expect(pipe.transform('2147483647')).toBe(2147483647);
 
-    for (const bad of ['0', '-5', '1.5', '2147483648', '999999999999', 'abc']) {
+    for (const bad of [
+      '0',
+      0,
+      '-5',
+      -5,
+      '1.5',
+      1.5,
+      Number.NaN,
+      '2147483648',
+      2147483648,
+      '999999999999',
+      'abc',
+    ]) {
       expect(() => pipe.transform(bad)).toThrow(BadRequestException);
     }
   });
