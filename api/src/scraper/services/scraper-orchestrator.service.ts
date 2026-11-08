@@ -13,8 +13,10 @@ import { CinemaCenterService } from '../cinemacenter/cinemacenter.service';
 import { CinemarkService } from '../cinemark/cinemark.service';
 import { CinepolisService } from '../cinepolis/cinepolis.service';
 import {
+  getArgentinaDayRange,
   getArgentinaStartOfToday,
   getArgentinaStartOfYesterday,
+  getArgentinaTodayDateString,
 } from '../../common/utils/argentina-time.util';
 
 export interface OrchestratorChainSummary {
@@ -157,7 +159,7 @@ export class ScraperOrchestratorService {
 
   async runByChainKey(chainKey: string): Promise<OrchestratorChainSummary> {
     const strategy = this.strategies.find(
-      (s) => s.chainKey.toLowerCase() === chainKey.toLowerCase(),
+      (s) => s.chainKey?.toLowerCase() === chainKey.toLowerCase(),
     );
 
     if (!strategy) {
@@ -321,7 +323,10 @@ export class ScraperOrchestratorService {
         uniqueMoviesInChain.add(dbMovieId);
 
         for (const st of movieItem.showtimes) {
-          if (isNaN(st.dateTime.getTime())) {
+          if (
+            isNaN(st.dateTime.getTime()) ||
+            st.dateTime.getTime() < startOfToday.getTime()
+          ) {
             discardedShowtimes++;
             continue;
           }
@@ -336,11 +341,50 @@ export class ScraperOrchestratorService {
         }
       }
 
-      if (showtimesBatch.length > 0) {
+      const windowStart = locData.coveredFrom ?? startOfToday;
+
+      if (locData.status === 'empty_verified') {
         await this.prisma.showtime.deleteMany({
           where: {
             locationId,
-            dateTime: { gte: startOfToday },
+            dateTime: {
+              gte: windowStart,
+              ...(locData.coveredUntil ? { lte: locData.coveredUntil } : {}),
+            },
+          },
+        });
+        locationsProcessed++;
+        continue;
+      }
+
+      if (locData.status === 'partial') {
+        if (showtimesBatch.length > 0) {
+          const created = await this.prisma.showtime.createMany({
+            data: showtimesBatch,
+            skipDuplicates: true,
+          });
+          totalShowtimesInserted += created.count;
+          locationsProcessed++;
+        }
+        continue;
+      }
+
+      if (locData.status === 'complete' && showtimesBatch.length > 0) {
+        const maxDateMs = showtimesBatch.reduce(
+          (max, item) => Math.max(max, item.dateTime.getTime()),
+          showtimesBatch[0].dateTime.getTime(),
+        );
+        const maxDateKey = getArgentinaTodayDateString(new Date(maxDateMs));
+        const windowEnd =
+          locData.coveredUntil ?? getArgentinaDayRange(maxDateKey).end;
+
+        await this.prisma.showtime.deleteMany({
+          where: {
+            locationId,
+            dateTime: {
+              gte: windowStart,
+              lte: windowEnd,
+            },
           },
         });
 
