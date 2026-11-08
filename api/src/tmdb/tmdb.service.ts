@@ -1,4 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import axios from 'axios';
 import {
   extractReleaseYearHint,
@@ -270,7 +274,12 @@ export class TmdbService {
     }
 
     if (!this.apiKey) {
-      return [];
+      this.logger.error(
+        'TMDB_API_KEY no configurada al consultar próximos estrenos.',
+      );
+      throw new ServiceUnavailableException(
+        'El servicio externo de próximos estrenos no está configurado.',
+      );
     }
 
     try {
@@ -287,16 +296,25 @@ export class TmdbService {
         },
       );
 
-      const results = response.data.results ?? [];
+      if (!Array.isArray(response.data?.results)) {
+        throw new Error('Invalid TMDB upcoming response structure');
+      }
+
+      const results = response.data.results;
       this.upcomingCache = {
         expiresAt: now + 60 * 60 * 1000, // 1 hour cache
         data: results,
       };
       return results;
     } catch (error: unknown) {
+      if (error instanceof ServiceUnavailableException) {
+        throw error;
+      }
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error consultando próximos estrenos: ${msg}`);
-      return [];
+      throw new ServiceUnavailableException(
+        'No se pudieron obtener los próximos estrenos temporalmente.',
+      );
     }
   }
 }

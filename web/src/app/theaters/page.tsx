@@ -1,4 +1,4 @@
-import { getCinemas } from '@/lib/api';
+import { getCinemas, getNearbyCinemas } from '@/lib/api';
 import { parseCoordinatePair } from '@/lib/dates';
 import { MapPin } from 'lucide-react';
 import Link from 'next/link';
@@ -9,35 +9,16 @@ interface Cinema {
   id: number;
   name: string;
   address: string | null;
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   distance?: number; // Agregamos la propiedad opcional de distancia
 }
 
 interface Chain {
   id: number;
   name: string;
-  logoUrl: string | null;
+  logoUrl?: string | null;
   locations: Cinema[];
-}
-
-// --- HELPER FETCH (Para llamar al endpoint de cercanía desde el Server Component) ---
-async function getNearbyCinemas(lat: string, lng: string) {
-  try {
-    // Importante: next: { revalidate: 0 } para que no cachee la ubicación y sea real-time
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/movies/nearby?lat=${lat}&lng=${lng}`,
-      {
-        next: { revalidate: 0 },
-      },
-    );
-
-    if (!res.ok) return [];
-    return res.json();
-  } catch (e) {
-    console.error('Error fetching nearby cinemas:', e);
-    return [];
-  }
 }
 
 // --- COMPONENTE DE PÁGINA ---

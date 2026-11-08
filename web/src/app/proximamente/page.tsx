@@ -2,6 +2,8 @@ import { getUpcomingMovies } from '@/lib/api';
 import MovieCard from '@/components/movies/MovieCard';
 import { CalendarDays, Film } from 'lucide-react';
 
+export const dynamic = 'force-dynamic';
+
 // 1. Metadatos para SEO (Ideal para que indexe bien si lo subís a producción)
 export const metadata = {
   title: 'Próximamente | Cine Radar',
@@ -14,8 +16,7 @@ export default async function ProximamentePage() {
 
   return (
     <div className="px-4 md:px-6 pt-4">
-      <div className="max-w-screen-2xl mx-auto"> 
-        
+      <div className="max-w-screen-2xl mx-auto">
         {/* --- CABECERA LIMPIA --- */}
         <div className="mb-10">
           <div className="flex items-center gap-3 mb-3">
@@ -35,12 +36,12 @@ export default async function ProximamentePage() {
         {movies.length > 0 ? (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6 xl:grid-cols-6">
             {movies.map((movie, index) => (
-              <MovieCard 
-                key={movie.id} 
-                movie={movie} 
-                variant="upcoming" 
+              <MovieCard
+                key={movie.id}
+                movie={movie}
+                variant="upcoming"
                 // Optimizamos la carga de imágenes: las primeras 5 se cargan con prioridad
-                priority={index < 5} 
+                priority={index < 5}
               />
             ))}
           </div>

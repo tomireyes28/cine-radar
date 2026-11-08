@@ -1,5 +1,4 @@
 import Image from 'next/image';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -87,18 +86,7 @@ export default async function MovieDetailPage({
   const movie = await getMovieDetail(id, selectedDate);
 
   if (!movie) {
-    return (
-      <div className="flex flex-col items-center justify-center py-32 text-zinc-400 gap-4">
-        <span className="text-4xl">😔</span>
-        <h1 className="text-xl font-medium">No encontramos esa película</h1>
-        <Link
-          href="/"
-          className="px-4 py-2 bg-zinc-800 rounded-lg hover:bg-violet-600 transition-colors text-white"
-        >
-          Volver al inicio
-        </Link>
-      </div>
-    );
+    notFound();
   }
 
   const allCinemasList = movie.cinemas.map((cg: CinemaGroup) => ({

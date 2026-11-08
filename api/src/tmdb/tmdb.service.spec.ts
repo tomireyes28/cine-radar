@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import axios from 'axios';
 import { selectBestTmdbCandidate, TmdbService } from './tmdb.service';
 
@@ -136,5 +137,25 @@ describe('TmdbService Candidate Selection & Shared Normalization (F11)', () => {
     const res = await service.lookupMovie('Gladiador II D-BOX');
     expect(res.status).toBe('matched');
     expect(capturedQuery).toBe('Gladiador II');
+  });
+
+  it('throws ServiceUnavailableException in getUpcomingMovies on upstream errors or missing key instead of caching [] (F12)', async () => {
+    const service = new TmdbService();
+
+    mockedAxios.get.mockRejectedValueOnce(new Error('HTTP 503 TMDB Down'));
+    await expect(service.getUpcomingMovies()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+
+    // Genuine HTTP 200 empty results returns [] without throwing
+    mockedAxios.get.mockResolvedValueOnce({ data: { results: [] } });
+    await expect(service.getUpcomingMovies()).resolves.toEqual([]);
+
+    // Missing API key throws ServiceUnavailableException on fresh instance
+    delete process.env.TMDB_API_KEY;
+    const unconfigured = new TmdbService();
+    await expect(unconfigured.getUpcomingMovies()).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 });

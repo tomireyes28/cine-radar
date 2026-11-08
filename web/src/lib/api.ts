@@ -1,6 +1,42 @@
-import { Movie, MovieDetail } from '@/types/movie';
+import type { Movie, MovieDetail } from '../types/movie.ts';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+export const DEFAULT_API_TIMEOUT_MS = 8_000;
+
+export type ApiErrorKind =
+  | 'misconfigured'
+  | 'rate_limited'
+  | 'upstream_http'
+  | 'timeout'
+  | 'network'
+  | 'invalid_json';
+
+export class ApiRequestError extends Error {
+  readonly kind: ApiErrorKind;
+  readonly status?: number;
+  readonly path: string;
+
+  constructor(
+    message: string,
+    options: {
+      kind: ApiErrorKind;
+      path: string;
+      status?: number;
+      cause?: unknown;
+    },
+  ) {
+    super(message, options.cause ? { cause: options.cause } : undefined);
+    this.name = 'ApiRequestError';
+    this.kind = options.kind;
+    this.status = options.status;
+    this.path = options.path;
+  }
+}
+
+export interface ApiRequestOptions {
+  apiBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+}
 
 export interface UpcomingMovie {
   id: number;
@@ -24,6 +60,7 @@ export interface CinemaLocation {
 export interface CinemaChain {
   id: number;
   name: string;
+  logoUrl?: string | null;
   locations: CinemaLocation[];
 }
 
@@ -34,47 +71,159 @@ export interface BillboardFilters {
   date?: string;
 }
 
-async function apiGet<T>(
+/**
+ * Performs an HTTP GET against the Cine Radar API:
+ * - Returns `null` ONLY on HTTP `404` (allowing routes to invoke `notFound()`).
+ * - Preserves genuine `200 []` empty collections.
+ * - Throws typed `ApiRequestError` on `429`, `5xx`, network failures, timeouts,
+ *   or missing `NEXT_PUBLIC_API_URL` so Next.js `error.tsx` activates and ISR
+ *   never caches an outage as empty content.
+ */
+export async function apiGet<T>(
   path: string,
   params: Record<string, string | undefined>,
   revalidate: number,
+  options: ApiRequestOptions = {},
 ): Promise<T | null> {
+  const baseUrl = (
+    options.apiBaseUrl ?? process.env.NEXT_PUBLIC_API_URL
+  )?.trim();
+
+  if (!baseUrl) {
+    throw new ApiRequestError(
+      `NEXT_PUBLIC_API_URL is not configured while requesting ${path}`,
+      { kind: 'misconfigured', path },
+    );
+  }
+
+  let url: URL;
   try {
-    const url = new URL(`${API_URL}${path}`);
-    for (const [key, value] of Object.entries(params)) {
-      if (value) url.searchParams.set(key, value);
+    const normalizedBase = baseUrl.replace(/\/+$/, '');
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    url = new URL(`${normalizedBase}${normalizedPath}`);
+  } catch (cause: unknown) {
+    throw new ApiRequestError(
+      `Invalid NEXT_PUBLIC_API_URL while requesting ${path}`,
+      { kind: 'misconfigured', path, cause },
+    );
+  }
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value) url.searchParams.set(key, value);
+  }
+
+  const fetchFn = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    const timeoutErr = new Error(`Request timed out after ${timeoutMs}ms`);
+    timeoutErr.name = 'TimeoutError';
+    controller.abort(timeoutErr);
+  }, timeoutMs);
+
+  let res: Response;
+  try {
+    res = await fetchFn(
+      url.toString(),
+      {
+        signal: controller.signal,
+        next: { revalidate },
+      } as RequestInit,
+    );
+  } catch (cause: unknown) {
+    const errName =
+      typeof cause === 'object' && cause !== null && 'name' in cause
+        ? String((cause as { name?: unknown }).name)
+        : '';
+    const errMessage =
+      cause instanceof Error ? cause.message : String(cause ?? '');
+
+    if (
+      controller.signal.aborted ||
+      errName === 'TimeoutError' ||
+      errName === 'AbortError' ||
+      /timed?\s*out|aborted/i.test(errMessage)
+    ) {
+      throw new ApiRequestError(
+        `API request timed out after ${timeoutMs}ms: ${path}`,
+        { kind: 'timeout', path, cause },
+      );
     }
 
-    const res = await fetch(url.toString(), { next: { revalidate } });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch (error) {
-    console.error(`API request failed: ${path}`, error);
+    throw new ApiRequestError(`API network request failed: ${path}`, {
+      kind: 'network',
+      path,
+      cause,
+    });
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+
+  if (res.status === 404) {
     return null;
+  }
+
+  if (res.status === 429) {
+    throw new ApiRequestError(`API rate limit exceeded (429): ${path}`, {
+      kind: 'rate_limited',
+      status: 429,
+      path,
+    });
+  }
+
+  if (!res.ok) {
+    throw new ApiRequestError(
+      `API upstream HTTP ${res.status} on ${path}`,
+      {
+        kind: 'upstream_http',
+        status: res.status,
+        path,
+      },
+    );
+  }
+
+  try {
+    return (await res.json()) as T;
+  } catch (cause: unknown) {
+    throw new ApiRequestError(`Invalid JSON payload returned from ${path}`, {
+      kind: 'invalid_json',
+      status: res.status,
+      path,
+      cause,
+    });
   }
 }
 
 export async function getNowPlaying(
   filters: BillboardFilters = {},
+  options?: ApiRequestOptions,
 ): Promise<Movie[]> {
-  const data = await apiGet<Movie[]>('/movies/now-playing', { ...filters }, 300);
+  const data = await apiGet<Movie[]>(
+    '/movies/now-playing',
+    { ...filters },
+    300,
+    options,
+  );
   return data ?? [];
 }
 
 export async function getMovieDetail(
   id: string,
   date?: string,
+  options?: ApiRequestOptions,
 ): Promise<MovieDetail | null> {
-  return apiGet<MovieDetail>(`/movies/${id}`, { date }, 300);
+  return apiGet<MovieDetail>(`/movies/${id}`, { date }, 300, options);
 }
 
-export async function getCinemas(): Promise<CinemaChain[] | null> {
-  return apiGet<CinemaChain[]>('/movies/filters', {}, 3600);
+export async function getCinemas(
+  options?: ApiRequestOptions,
+): Promise<CinemaChain[]> {
+  const data = await apiGet<CinemaChain[]>('/movies/filters', {}, 3600, options);
+  return data ?? [];
 }
 
-export async function getCinemaById(id: string) {
-  const chains = await getCinemas();
-  if (!chains) return null;
+export async function getCinemaById(id: string, options?: ApiRequestOptions) {
+  const chains = await getCinemas(options);
 
   for (const chain of chains) {
     const cinema = chain.locations.find((c) => c.id.toString() === id);
@@ -85,23 +234,36 @@ export async function getCinemaById(id: string) {
   return null;
 }
 
-export async function getUpcomingMovies(): Promise<UpcomingMovie[]> {
-  const data = await apiGet<UpcomingMovie[]>('/movies/upcoming', {}, 3600);
+export async function getUpcomingMovies(
+  options?: ApiRequestOptions,
+): Promise<UpcomingMovie[]> {
+  const data = await apiGet<UpcomingMovie[]>(
+    '/movies/upcoming',
+    {},
+    3600,
+    options,
+  );
   return data ?? [];
 }
 
 export async function getMoviesForCinema(
   cinemaId: string,
   date?: string,
+  options?: ApiRequestOptions,
 ): Promise<Movie[]> {
-  return getNowPlaying({ cinemaId, date });
+  return getNowPlaying({ cinemaId, date }, options);
 }
 
-export async function getNearbyCinemas(lat: string, lng: string) {
+export async function getNearbyCinemas(
+  lat: string,
+  lng: string,
+  options?: ApiRequestOptions,
+) {
   const data = await apiGet<(CinemaLocation & { distance: number })[]>(
     '/movies/nearby',
     { lat, lng },
     0,
+    options,
   );
   return data ?? [];
 }
