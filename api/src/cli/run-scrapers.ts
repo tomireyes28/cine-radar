@@ -24,12 +24,12 @@ async function bootstrap(): Promise<0 | 1> {
     const orchestrator = appContext.get(ScraperOrchestratorService);
 
     if (targetChain) {
-      const summary = await orchestrator.runByChainKey(targetChain);
+      const summary = await orchestrator.runByChainKey(targetChain, 'cli');
       console.log('📊 Resumen de cadena:', JSON.stringify(summary, null, 2));
       return resolveSingleChainExitCode(summary);
     }
 
-    const summary = await orchestrator.runAll();
+    const summary = await orchestrator.runAll('cli');
     console.log('📊 Resumen general:', JSON.stringify(summary, null, 2));
     return resolveFullRunExitCode(summary);
   } finally {

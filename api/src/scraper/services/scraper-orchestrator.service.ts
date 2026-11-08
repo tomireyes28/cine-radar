@@ -5,6 +5,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MovieIdentityService } from './movie-identity.service';
 import {
@@ -70,6 +71,8 @@ function buildShowtimeCompositeKey(row: {
   return `${row.movieId}|${row.dateTime.getTime()}|${row.format}|${row.language}`;
 }
 
+export type ScrapeTrigger = 'cli' | 'cron' | 'http' | 'manual';
+
 export interface OrchestratorRunSummary {
   status: 'ok' | 'degraded' | 'failed';
   completedAt: string;
@@ -107,8 +110,11 @@ export class ScraperOrchestratorService {
     ];
   }
 
-  async runAll(): Promise<OrchestratorRunSummary> {
+  async runAll(
+    trigger: ScrapeTrigger = 'manual',
+  ): Promise<OrchestratorRunSummary> {
     const startTime = Date.now();
+    const startedAt = new Date(startTime);
     let globalOwner: string | null = null;
 
     if (this.scraperLock) {
@@ -227,19 +233,55 @@ export class ScraperOrchestratorService {
         overallStatus = 'degraded';
       }
 
-      this.logger.log(
-        `Orquestación finalizada (${overallStatus}) en ${((Date.now() - startTime) / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
-      );
-
-      return {
+      const completedAt = new Date();
+      const durationMs = completedAt.getTime() - startTime;
+      const runSummary: OrchestratorRunSummary = {
         status: overallStatus,
-        completedAt: new Date().toISOString(),
+        completedAt: completedAt.toISOString(),
         deletedExpiredShowtimes: deletedOld,
         totalShowtimesInserted: totalShowtimes,
         failedChains,
         partialChains,
         chains: summaries,
       };
+
+      await this.recordScrapeRun({
+        trigger,
+        scope: 'all',
+        status: overallStatus,
+        startedAt,
+        completedAt,
+        durationMs,
+        expectedLocations: summaries.reduce(
+          (acc, s) => acc + s.expectedLocations,
+          0,
+        ),
+        locationsSucceeded: summaries.reduce(
+          (acc, s) =>
+            acc +
+            s.locationsComplete +
+            s.locationsEmptyVerified +
+            s.locationsPartial,
+          0,
+        ),
+        locationsFailed: summaries.reduce(
+          (acc, s) => acc + s.locationsFailed,
+          0,
+        ),
+        showtimesInserted: totalShowtimes,
+        showtimesUnchanged: summaries.reduce(
+          (acc, s) => acc + (s.showtimesUnchanged ?? 0),
+          0,
+        ),
+        failedChains,
+        summaryJson: runSummary,
+      });
+
+      this.logger.log(
+        `Orquestación finalizada (${overallStatus}) en ${(durationMs / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
+      );
+
+      return runSummary;
     } finally {
       if (this.scraperLock && globalOwner) {
         await this.scraperLock.release(GLOBAL_SCRAPER_LOCK_KEY, globalOwner);
@@ -247,7 +289,10 @@ export class ScraperOrchestratorService {
     }
   }
 
-  async runByChainKey(chainKey: string): Promise<OrchestratorChainSummary> {
+  async runByChainKey(
+    chainKey: string,
+    trigger: ScrapeTrigger = 'manual',
+  ): Promise<OrchestratorChainSummary> {
     const strategy = this.strategies.find(
       (s) => s.chainKey?.toLowerCase() === chainKey.toLowerCase(),
     );
@@ -281,14 +326,40 @@ export class ScraperOrchestratorService {
 
     const resolvedMovieDbIds = new Map<string, number | null>();
     const chainStart = Date.now();
+    const startedAt = new Date(chainStart);
     try {
-      return await this.executeStrategy(strategy, resolvedMovieDbIds);
+      const summary = await this.executeStrategy(strategy, resolvedMovieDbIds);
+      const completedAt = new Date();
+      await this.recordScrapeRun({
+        trigger,
+        scope: strategy.chainKey,
+        status:
+          summary.status === 'failed'
+            ? 'failed'
+            : summary.status === 'partial'
+              ? 'degraded'
+              : 'ok',
+        startedAt,
+        completedAt,
+        durationMs: summary.durationMs,
+        expectedLocations: summary.expectedLocations,
+        locationsSucceeded:
+          summary.locationsComplete +
+          summary.locationsEmptyVerified +
+          summary.locationsPartial,
+        locationsFailed: summary.locationsFailed,
+        showtimesInserted: summary.showtimesInserted,
+        showtimesUnchanged: summary.showtimesUnchanged ?? 0,
+        failedChains: summary.status === 'failed' ? [strategy.chainKey] : [],
+        summaryJson: summary,
+      });
+      return summary;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Fallo ejecutando cadena individual ${strategy.chainName}: ${msg}`,
       );
-      return {
+      const failedSummary: OrchestratorChainSummary = {
         chainKey: strategy.chainKey,
         chainName: strategy.chainName,
         status: 'failed',
@@ -304,10 +375,76 @@ export class ScraperOrchestratorService {
         durationMs: Date.now() - chainStart,
         errors: [msg],
       };
+      await this.recordScrapeRun({
+        trigger,
+        scope: strategy.chainKey,
+        status: 'failed',
+        startedAt,
+        completedAt: new Date(),
+        durationMs: failedSummary.durationMs,
+        expectedLocations: 0,
+        locationsSucceeded: 0,
+        locationsFailed: 0,
+        showtimesInserted: 0,
+        showtimesUnchanged: 0,
+        failedChains: [strategy.chainKey],
+        summaryJson: failedSummary,
+      });
+      return failedSummary;
     } finally {
       if (this.scraperLock && chainOwner) {
         await this.scraperLock.release(chainLockKey, chainOwner);
       }
+    }
+  }
+
+  private async recordScrapeRun(entry: {
+    trigger: ScrapeTrigger;
+    scope: string;
+    status: 'ok' | 'degraded' | 'failed';
+    startedAt: Date;
+    completedAt: Date;
+    durationMs: number;
+    expectedLocations: number;
+    locationsSucceeded: number;
+    locationsFailed: number;
+    showtimesInserted: number;
+    showtimesUnchanged: number;
+    failedChains: string[];
+    summaryJson: unknown;
+  }): Promise<void> {
+    const maybeCreate = (
+      this.prisma as { scrapeRun?: { create?: unknown } }
+    ).scrapeRun?.create;
+    if (typeof maybeCreate !== 'function') {
+      return;
+    }
+
+    try {
+      await this.prisma.scrapeRun.create({
+        data: {
+          trigger: entry.trigger,
+          scope: entry.scope,
+          status: entry.status,
+          startedAt: entry.startedAt,
+          completedAt: entry.completedAt,
+          durationMs: entry.durationMs,
+          expectedLocations: entry.expectedLocations,
+          locationsSucceeded: entry.locationsSucceeded,
+          locationsFailed: entry.locationsFailed,
+          showtimesInserted: entry.showtimesInserted,
+          showtimesUnchanged: entry.showtimesUnchanged,
+          failedChains: entry.failedChains,
+          summaryJson: JSON.parse(
+            JSON.stringify(entry.summaryJson),
+          ) as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(
+        `No se pudo persistir telemetría ScrapeRun (${entry.scope}): ${msg}`,
+      );
     }
   }
 

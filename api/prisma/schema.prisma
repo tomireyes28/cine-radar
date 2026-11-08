@@ -76,3 +76,22 @@ model ScraperLock {
 
   @@index([expiresAt])
 }
+
+model ScrapeRun {
+  id                 Int      @id @default(autoincrement())
+  trigger            String
+  scope              String   @default("all")
+  status             String
+  startedAt          DateTime
+  completedAt        DateTime @default(now())
+  durationMs         Int
+  expectedLocations  Int      @default(0)
+  locationsSucceeded Int      @default(0)
+  locationsFailed    Int      @default(0)
+  showtimesInserted  Int      @default(0)
+  showtimesUnchanged Int      @default(0)
+  failedChains       String[] @default([])
+  summaryJson        Json?
+
+  @@index([completedAt(sort: Desc)])
+}

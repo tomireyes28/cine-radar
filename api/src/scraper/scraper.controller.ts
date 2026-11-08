@@ -54,7 +54,7 @@ export class ScraperController {
   })
   async runAll() {
     this.ensureHttpScraperEnabled();
-    return this.orchestrator.runAll();
+    return this.orchestrator.runAll('http');
   }
 
   @Post(':chainKey')
@@ -82,6 +82,6 @@ export class ScraperController {
   })
   async runByChain(@Param('chainKey') chainKey: string) {
     this.ensureHttpScraperEnabled();
-    return this.orchestrator.runByChainKey(chainKey);
+    return this.orchestrator.runByChainKey(chainKey, 'http');
   }
 }

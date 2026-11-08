@@ -24,7 +24,7 @@ export class CronService {
       `Iniciando actualización programada de cartelera (${ARGENTINA_TIMEZONE})...`,
     );
     try {
-      await this.scraperOrchestrator.runAll();
+      await this.scraperOrchestrator.runAll('cron');
     } catch (error: unknown) {
       if (error instanceof ConflictException) {
         this.logger.warn(

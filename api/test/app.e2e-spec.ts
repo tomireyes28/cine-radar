@@ -17,21 +17,31 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
   const originalAdminKey = process.env.ADMIN_API_KEY;
   const originalEnableHttpScraper = process.env.ENABLE_HTTP_SCRAPER;
 
+  const queryRawSpy = jest.fn();
   const findManyMoviesSpy = jest.fn();
   const findUniqueMovieSpy = jest.fn();
   const findManyShowtimesSpy = jest.fn();
+  const countShowtimesSpy = jest.fn();
+  const aggregateShowtimesSpy = jest.fn();
+  const findFirstScrapeRunSpy = jest.fn();
   const findManyLocationsSpy = jest.fn();
   const getUpcomingMoviesSpy = jest.fn();
 
   const prismaMock = {
     $connect: jest.fn().mockResolvedValue(undefined),
     $disconnect: jest.fn().mockResolvedValue(undefined),
+    $queryRaw: queryRawSpy,
     movie: {
       findMany: findManyMoviesSpy,
       findUnique: findUniqueMovieSpy,
     },
     showtime: {
       findMany: findManyShowtimesSpy,
+      count: countShowtimesSpy,
+      aggregate: aggregateShowtimesSpy,
+    },
+    scrapeRun: {
+      findFirst: findFirstScrapeRunSpy,
     },
     cinemaLocation: {
       findMany: findManyLocationsSpy,
@@ -63,6 +73,24 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    queryRawSpy.mockResolvedValue([{ '?column?': 1 }]);
+    countShowtimesSpy.mockResolvedValue(120);
+    aggregateShowtimesSpy.mockResolvedValue({
+      _max: { dateTime: new Date('2026-11-12T23:00:00.000Z') },
+    });
+    findFirstScrapeRunSpy.mockResolvedValue({
+      id: 3,
+      trigger: 'cli',
+      scope: 'all',
+      status: 'ok',
+      completedAt: new Date('2026-11-08T07:02:00.000Z'),
+      durationMs: 25000,
+      locationsSucceeded: 68,
+      locationsFailed: 0,
+      showtimesInserted: 120,
+      showtimesUnchanged: 0,
+      failedChains: [],
+    });
   });
 
   afterAll(async () => {
@@ -108,6 +136,25 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
     expect(
       allowedRes.headers['access-control-allow-credentials'],
     ).toBeUndefined();
+    expect(
+      (
+        allowedRes.body as {
+          database: string;
+          billboard: { activeFutureShowtimes: number; isStale: boolean };
+          lastScrapeRun: { status: string } | null;
+        }
+      ).database,
+    ).toBe('connected');
+    expect(
+      (
+        allowedRes.body as {
+          billboard: { activeFutureShowtimes: number; isStale: boolean };
+        }
+      ).billboard,
+    ).toMatchObject({
+      activeFutureShowtimes: 120,
+      isStale: false,
+    });
 
     const rejectedRes = await request(app.getHttpServer())
       .get('/health')
@@ -117,6 +164,9 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
     expect(
       rejectedRes.headers['access-control-allow-origin'],
     ).toBeUndefined();
+
+    queryRawSpy.mockRejectedValueOnce(new Error('PostgreSQL down'));
+    await request(app.getHttpServer()).get('/health').expect(503);
   });
 
   it('GET /movies/now-playing returns 200 on valid filters and 400 on impossible dates or unknown params', async () => {

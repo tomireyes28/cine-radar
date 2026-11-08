@@ -8,14 +8,24 @@ export class AppController {
   constructor(private readonly appService: AppService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Estado del servicio API' })
+  @ApiOperation({ summary: 'Estado ligero de actividad del servicio API (liveness)' })
   getStatus() {
-    return this.appService.getHealthStatus();
+    return this.appService.getLivenessStatus();
   }
 
   @Get('health')
-  @ApiOperation({ summary: 'Health check para monitoreo y orquestadores (Railway)' })
-  @ApiResponse({ status: 200, description: 'Servicio en estado saludable' })
+  @ApiOperation({
+    summary:
+      'Readiness y frescura de cartelera para monitoreo y orquestadores (Railway)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Base de datos conectada y métricas de frescura de cartelera',
+  })
+  @ApiResponse({
+    status: 503,
+    description: 'Base de datos inaccesible',
+  })
   getHealth() {
     return this.appService.getHealthStatus();
   }
