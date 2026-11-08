@@ -41,6 +41,7 @@ export default function CinemaSelector({
 
   return (
     <select
+      aria-label="Filtrar horarios por complejo de cine"
       value={currentCinemaId}
       onChange={handleChange}
       className="bg-zinc-900 border border-zinc-700 text-zinc-100 text-sm md:text-base rounded-xl px-4 py-2 hover:border-violet-500 focus:outline-hidden focus:border-violet-500 focus:ring-1 focus:ring-violet-500 transition-colors cursor-pointer w-full md:w-auto"

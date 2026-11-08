@@ -40,8 +40,8 @@ export default async function ProximamentePage() {
                 key={movie.id}
                 movie={movie}
                 variant="upcoming"
-                // Optimizamos la carga de imágenes: las primeras 5 se cargan con prioridad
-                priority={index < 5}
+                // Optimizamos la carga de imágenes: las primeras 4 de la primera fila se cargan con prioridad
+                priority={index < 4}
               />
             ))}
           </div>

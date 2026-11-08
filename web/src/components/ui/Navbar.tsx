@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import Image from 'next/image'; // ✅ Importamos Image de Next.js
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Home, MapPin, CalendarDays } from 'lucide-react'; 
+import { Home, MapPin, CalendarDays } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const navItems = [
@@ -21,41 +21,37 @@ export default function Navbar() {
       {/* --- DESKTOP NAVBAR (Top) --- */}
       <header className="hidden md:flex fixed top-0 w-full z-50 bg-zinc-950/80 backdrop-blur-md border-b border-zinc-800">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-          
-         {/* ✅ Logo forzado por ANCHO (w-) en lugar de ALTO (h-) */}
-          <Link href="/">
-            <motion.div 
+          <Link href="/" aria-label="Cine Radar - Ir al inicio">
+            <motion.div
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               className="flex items-center hover:opacity-80 transition-opacity"
             >
-              <Image 
-                src="/logo.png" 
-                alt="Cine Radar Logo" 
-                width={400} 
-                height={100} 
-                // 👇 ACÁ ESTÁ LA MAGIA: Controlamos el ancho, no el alto.
-                className="w-36 md:w-48 h-auto object-contain" 
-                priority 
+              <Image
+                src="/logo.png"
+                alt="Cine Radar Logo"
+                width={400}
+                height={100}
+                className="w-36 md:w-48 h-auto object-contain"
+                priority
               />
             </motion.div>
           </Link>
 
-          {/* Menú Clásico Desktop */}
-          <nav className="flex gap-8">
+          <nav aria-label="Navegación principal" className="flex gap-8">
             {navItems.map((item) => {
               const isActive = pathname === item.href;
               return (
-                <Link 
-                  key={item.href} 
+                <Link
+                  key={item.href}
                   href={item.href}
+                  aria-current={isActive ? 'page' : undefined}
                   className={clsx(
-                    "text-sm font-medium transition-colors hover:text-violet-400 relative py-2",
-                    isActive ? "text-violet-400" : "text-zinc-400"
+                    'text-sm font-medium transition-colors hover:text-violet-400 relative py-2',
+                    isActive ? 'text-violet-400' : 'text-zinc-400',
                   )}
                 >
                   {item.name}
-                  {/* Línea animada debajo del link activo */}
                   {isActive && (
                     <motion.div
                       layoutId="desktop-navbar-underline"
@@ -70,38 +66,44 @@ export default function Navbar() {
       </header>
 
       {/* --- MOBILE NAVBAR (Bottom) --- */}
-      <nav className="md:hidden fixed bottom-0 w-full z-50 bg-zinc-950/90 backdrop-blur-lg border-t border-zinc-800 pb-safe">
+      <nav
+        aria-label="Navegación móvil"
+        className="md:hidden fixed bottom-0 w-full z-50 bg-zinc-950/90 backdrop-blur-lg border-t border-zinc-800 pb-safe"
+      >
         <div className="flex justify-around items-center h-16">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
 
             return (
-              <Link 
-                key={item.href} 
+              <Link
+                key={item.href}
                 href={item.href}
+                aria-current={isActive ? 'page' : undefined}
                 className="relative flex flex-col items-center justify-center w-full h-full"
               >
-                {/* Fondo animado al seleccionar */}
                 {isActive && (
                   <motion.div
                     layoutId="mobile-navbar-glow"
                     className="absolute inset-2 bg-violet-500/20 rounded-xl -z-10"
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 30 }}
                   />
                 )}
-                
-                <Icon 
-                  size={24} 
+
+                <Icon
+                  size={24}
+                  aria-hidden="true"
                   className={clsx(
-                    "transition-colors duration-300",
-                    isActive ? "text-violet-400" : "text-zinc-500"
-                  )} 
+                    'transition-colors duration-300',
+                    isActive ? 'text-violet-400' : 'text-zinc-500',
+                  )}
                 />
-                <span className={clsx(
-                  "text-[10px] mt-1 font-medium",
-                  isActive ? "text-violet-300" : "text-zinc-600"
-                )}>
+                <span
+                  className={clsx(
+                    'text-[10px] mt-1 font-medium',
+                    isActive ? 'text-violet-300' : 'text-zinc-600',
+                  )}
+                >
                   {item.name}
                 </span>
               </Link>

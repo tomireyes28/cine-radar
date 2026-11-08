@@ -22,7 +22,10 @@ export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
   const targetBase = baseUrl ?? (movieId ? `/movie/${movieId}` : '');
 
   return (
-    <div className="w-full overflow-x-auto pb-4 pt-2 no-scrollbar">
+    <nav
+      aria-label="Seleccionar fecha de función"
+      className="w-full overflow-x-auto pb-4 pt-2 no-scrollbar"
+    >
       <div className="flex gap-3 min-w-max px-1">
         {days.map((dateString, i) => {
           const isSelected = dateString === selectedDate;
@@ -34,6 +37,7 @@ export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
               : i === 1
                 ? 'MAÑANA'
                 : format(date, 'EEE', { locale: es }).toUpperCase();
+          const spokenDate = format(date, "EEEE d 'de' MMMM", { locale: es });
 
           // Preserve other query parameters when switching day
           const params = new URLSearchParams(searchParams.toString());
@@ -44,7 +48,9 @@ export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
               key={dateString}
               href={`${targetBase}?${params.toString()}`}
               scroll={false}
-              className="relative"
+              aria-current={isSelected ? 'date' : undefined}
+              aria-label={`Ver funciones del ${spokenDate}`}
+              className="relative rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
             >
               <div
                 className={clsx(
@@ -70,6 +76,6 @@ export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
           );
         })}
       </div>
-    </div>
+    </nav>
   );
 }

@@ -137,7 +137,7 @@ export default async function CinemaDetailPage({
                 key={movie.id}
                 movie={movie}
                 variant="now-playing"
-                priority={index < 5}
+                priority={index < 4}
                 cinemaId={id}
                 date={selectedDate}
               />

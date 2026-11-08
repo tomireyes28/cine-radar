@@ -28,10 +28,14 @@ export default function MovieDashboard({
       <div className="sticky top-20 z-30 mb-8 max-w-xl mx-auto">
         <div className="relative group">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-5 w-5 text-zinc-500 group-focus-within:text-violet-500 transition-colors" />
+            <Search
+              aria-hidden="true"
+              className="h-5 w-5 text-zinc-500 group-focus-within:text-violet-500 transition-colors"
+            />
           </div>
           <input
-            type="text"
+            type="search"
+            aria-label="Buscar película en cartelera"
             placeholder="Buscar película..."
             className="block w-full pl-10 pr-3 py-3 border border-zinc-800 rounded-xl leading-5 bg-zinc-950/80 backdrop-blur-md text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 sm:text-sm shadow-xl transition-all"
             value={searchTerm}
@@ -50,7 +54,7 @@ export default function MovieDashboard({
             <MovieCard
               key={movie.id}
               movie={movie}
-              priority={index < 5}
+              priority={index < 4}
               date={selectedDate}
             />
           ))}
@@ -64,6 +68,7 @@ export default function MovieDashboard({
             No encontramos nada con &quot;{searchTerm}&quot; 😔
           </p>
           <button
+            type="button"
             onClick={() => setSearchTerm('')}
             className="mt-4 text-violet-400 hover:text-violet-300 text-sm font-medium"
           >
