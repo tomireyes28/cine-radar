@@ -2,8 +2,10 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MovieIdentityService } from './movie-identity.service';
 import {
+  deriveChainScrapeStatus,
   ICinemaScraper,
   ScrapedChainResult,
+  ScrapedLocationResult,
   ScrapeStatus,
 } from '../interfaces/scraper.interface';
 import { AtlasService } from '../atlas/atlas.service';
@@ -280,133 +282,214 @@ export class ScraperOrchestratorService {
     const uniqueMoviesInChain = new Set<number>();
 
     const startOfToday = getArgentinaStartOfToday();
+    const effectiveLocations: ScrapedLocationResult[] = chainData.locations.map(
+      (loc) => ({ ...loc }),
+    );
+    const effectiveErrors: string[] = [...chainData.errors];
+    let hadPersistenceFailure = false;
 
-    for (const locData of chainData.locations) {
+    for (let i = 0; i < effectiveLocations.length; i++) {
+      const locData = effectiveLocations[i];
       if (locData.status === 'failed') {
         continue;
       }
 
-      let locationId = locationIdByName.get(locData.locationName);
-      if (!locationId) {
-        const created = await this.prisma.cinemaLocation.create({
-          data: {
-            name: locData.locationName,
-            chainId: chain.id,
-            address: 'Ver ubicación',
-            lat: 0,
-            lng: 0,
-          },
-        });
-        locationId = created.id;
-        locationIdByName.set(locData.locationName, locationId);
-      }
+      try {
+        let locationId = locationIdByName.get(locData.locationName);
+        if (!locationId) {
+          const created = await this.prisma.cinemaLocation.create({
+            data: {
+              name: locData.locationName,
+              chainId: chain.id,
+              address: 'Ver ubicación',
+              lat: 0,
+              lng: 0,
+            },
+          });
+          locationId = created.id;
+          locationIdByName.set(locData.locationName, locationId);
+        }
 
-      const showtimesBatch: {
-        movieId: number;
-        locationId: number;
-        dateTime: Date;
-        format: string;
-        language: string;
-        ticketUrl: string;
-      }[] = [];
+        // Resolve movie identities (and any TMDB HTTP calls) outside the DB transaction
+        const showtimesBatch: {
+          movieId: number;
+          locationId: number;
+          dateTime: Date;
+          format: string;
+          language: string;
+          ticketUrl: string;
+        }[] = [];
+        const venueMovieIds = new Set<number>();
+        let venueDiscarded = 0;
 
-      for (const movieItem of locData.movies) {
-        const dbMovieId = await this.movieIdentity.resolveAndUpsertMovie(
-          movieItem.rawTitle,
-          resolvedMovieDbIds,
-        );
-        if (!dbMovieId) {
-          discardedShowtimes += movieItem.showtimes.length;
+        for (const movieItem of locData.movies) {
+          const dbMovieId = await this.movieIdentity.resolveAndUpsertMovie(
+            movieItem.rawTitle,
+            resolvedMovieDbIds,
+          );
+          if (!dbMovieId) {
+            venueDiscarded += movieItem.showtimes.length;
+            continue;
+          }
+
+          venueMovieIds.add(dbMovieId);
+
+          for (const st of movieItem.showtimes) {
+            if (
+              isNaN(st.dateTime.getTime()) ||
+              st.dateTime.getTime() < startOfToday.getTime()
+            ) {
+              venueDiscarded++;
+              continue;
+            }
+            showtimesBatch.push({
+              movieId: dbMovieId,
+              locationId,
+              dateTime: st.dateTime,
+              format: st.format,
+              language: st.language,
+              ticketUrl: st.ticketUrl,
+            });
+          }
+        }
+
+        const windowStart = locData.coveredFrom ?? startOfToday;
+        const resolvedLocationId = locationId;
+
+        if (locData.status === 'empty_verified') {
+          await this.prisma.$transaction(
+            async (tx) => {
+              await tx.showtime.deleteMany({
+                where: {
+                  locationId: resolvedLocationId,
+                  dateTime: {
+                    gte: windowStart,
+                    ...(locData.coveredUntil
+                      ? { lte: locData.coveredUntil }
+                      : {}),
+                  },
+                },
+              });
+            },
+            { maxWait: 5000, timeout: 15000 },
+          );
+          discardedShowtimes += venueDiscarded;
+          locationsProcessed++;
           continue;
         }
 
-        uniqueMoviesInChain.add(dbMovieId);
-
-        for (const st of movieItem.showtimes) {
-          if (
-            isNaN(st.dateTime.getTime()) ||
-            st.dateTime.getTime() < startOfToday.getTime()
-          ) {
-            discardedShowtimes++;
-            continue;
+        if (locData.status === 'partial') {
+          discardedShowtimes += venueDiscarded;
+          if (showtimesBatch.length > 0) {
+            const created = await this.prisma.$transaction(
+              async (tx) =>
+                tx.showtime.createMany({
+                  data: showtimesBatch,
+                  skipDuplicates: true,
+                }),
+              { maxWait: 5000, timeout: 15000 },
+            );
+            totalShowtimesInserted += created.count;
+            for (const id of venueMovieIds) {
+              uniqueMoviesInChain.add(id);
+            }
+            locationsProcessed++;
           }
-          showtimesBatch.push({
-            movieId: dbMovieId,
-            locationId,
-            dateTime: st.dateTime,
-            format: st.format,
-            language: st.language,
-            ticketUrl: st.ticketUrl,
-          });
+          continue;
         }
-      }
 
-      const windowStart = locData.coveredFrom ?? startOfToday;
+        if (locData.status === 'complete') {
+          discardedShowtimes += venueDiscarded;
+          if (showtimesBatch.length > 0) {
+            const maxDateMs = showtimesBatch.reduce(
+              (max, item) => Math.max(max, item.dateTime.getTime()),
+              showtimesBatch[0].dateTime.getTime(),
+            );
+            const maxDateKey = getArgentinaTodayDateString(new Date(maxDateMs));
+            const windowEnd =
+              locData.coveredUntil ?? getArgentinaDayRange(maxDateKey).end;
 
-      if (locData.status === 'empty_verified') {
-        await this.prisma.showtime.deleteMany({
-          where: {
-            locationId,
-            dateTime: {
-              gte: windowStart,
-              ...(locData.coveredUntil ? { lte: locData.coveredUntil } : {}),
-            },
-          },
-        });
-        locationsProcessed++;
-        continue;
-      }
+            const created = await this.prisma.$transaction(
+              async (tx) => {
+                await tx.showtime.deleteMany({
+                  where: {
+                    locationId: resolvedLocationId,
+                    dateTime: {
+                      gte: windowStart,
+                      lte: windowEnd,
+                    },
+                  },
+                });
 
-      if (locData.status === 'partial') {
-        if (showtimesBatch.length > 0) {
-          const created = await this.prisma.showtime.createMany({
-            data: showtimesBatch,
-            skipDuplicates: true,
-          });
-          totalShowtimesInserted += created.count;
-          locationsProcessed++;
+                return tx.showtime.createMany({
+                  data: showtimesBatch,
+                  skipDuplicates: true,
+                });
+              },
+              { maxWait: 5000, timeout: 15000 },
+            );
+
+            totalShowtimesInserted += created.count;
+            for (const id of venueMovieIds) {
+              uniqueMoviesInChain.add(id);
+            }
+            locationsProcessed++;
+          }
         }
-        continue;
-      }
-
-      if (locData.status === 'complete' && showtimesBatch.length > 0) {
-        const maxDateMs = showtimesBatch.reduce(
-          (max, item) => Math.max(max, item.dateTime.getTime()),
-          showtimesBatch[0].dateTime.getTime(),
-        );
-        const maxDateKey = getArgentinaTodayDateString(new Date(maxDateMs));
-        const windowEnd =
-          locData.coveredUntil ?? getArgentinaDayRange(maxDateKey).end;
-
-        await this.prisma.showtime.deleteMany({
-          where: {
-            locationId,
-            dateTime: {
-              gte: windowStart,
-              lte: windowEnd,
-            },
-          },
-        });
-
-        const created = await this.prisma.showtime.createMany({
-          data: showtimesBatch,
-          skipDuplicates: true,
-        });
-
-        totalShowtimesInserted += created.count;
-        locationsProcessed++;
+      } catch (error: unknown) {
+        hadPersistenceFailure = true;
+        const msg = error instanceof Error ? error.message : String(error);
+        const venueError = `[${locData.locationName}] Fallo transaccional al persistir cartelera: ${msg}`;
+        this.logger.error(`[${chainData.chainName}] ${venueError}`);
+        effectiveLocations[i] = {
+          ...locData,
+          status: 'failed',
+          errors: [...(locData.errors ?? []), venueError],
+        };
+        effectiveErrors.push(venueError);
       }
     }
 
+    if (hadPersistenceFailure) {
+      locationsComplete = 0;
+      locationsEmptyVerified = 0;
+      locationsPartial = 0;
+      locationsFailed = 0;
+      for (const loc of effectiveLocations) {
+        switch (loc.status) {
+          case 'complete':
+            locationsComplete++;
+            break;
+          case 'empty_verified':
+            locationsEmptyVerified++;
+            break;
+          case 'partial':
+            locationsPartial++;
+            break;
+          case 'failed':
+            locationsFailed++;
+            break;
+        }
+      }
+    }
+
+    const finalStatus = hadPersistenceFailure
+      ? deriveChainScrapeStatus(
+          effectiveLocations,
+          chainData.expectedLocations,
+          effectiveErrors,
+        )
+      : chainData.status;
+
     const durationMs = Date.now() - startTime;
     this.logger.log(
-      `[${chainData.chainName}] estado=${chainData.status}, sedesProcesadas=${locationsProcessed}/${chainData.expectedLocations}, películas=${uniqueMoviesInChain.size}, horarios=${totalShowtimesInserted}, descartados=${discardedShowtimes} en ${(durationMs / 1000).toFixed(1)}s`,
+      `[${chainData.chainName}] estado=${finalStatus}, sedesProcesadas=${locationsProcessed}/${chainData.expectedLocations}, películas=${uniqueMoviesInChain.size}, horarios=${totalShowtimesInserted}, descartados=${discardedShowtimes} en ${(durationMs / 1000).toFixed(1)}s`,
     );
 
     return {
       chainKey,
       chainName: chainData.chainName,
-      status: chainData.status,
+      status: finalStatus,
       expectedLocations: chainData.expectedLocations,
       locationsComplete,
       locationsEmptyVerified,
@@ -417,7 +500,7 @@ export class ScraperOrchestratorService {
       showtimesInserted: totalShowtimesInserted,
       discardedShowtimes,
       durationMs,
-      errors: chainData.errors,
+      errors: effectiveErrors,
     };
   }
 
