@@ -8,14 +8,18 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 interface MovieDashboardProps {
   initialMovies: Movie[];
+  selectedDate?: string;
 }
 
-export default function MovieDashboard({ initialMovies }: MovieDashboardProps) {
+export default function MovieDashboard({
+  initialMovies,
+  selectedDate,
+}: MovieDashboardProps) {
   const [searchTerm, setSearchTerm] = useState('');
 
   // Lógica de filtrado en tiempo real
   const filteredMovies = initialMovies.filter((movie) =>
-    movie.title.toLowerCase().includes(searchTerm.toLowerCase())
+    movie.title.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
   return (
@@ -37,13 +41,17 @@ export default function MovieDashboard({ initialMovies }: MovieDashboardProps) {
       </div>
 
       {/* --- GRID DE RESULTADOS --- */}
-      <motion.div layout className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6 mb-24">
+      <motion.div
+        layout
+        className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 md:gap-6 mb-24"
+      >
         <AnimatePresence>
           {filteredMovies.map((movie, index) => (
-            <MovieCard 
-              key={movie.id} 
-              movie={movie} 
-              priority={index < 5} 
+            <MovieCard
+              key={movie.id}
+              movie={movie}
+              priority={index < 5}
+              date={selectedDate}
             />
           ))}
         </AnimatePresence>
@@ -52,8 +60,10 @@ export default function MovieDashboard({ initialMovies }: MovieDashboardProps) {
       {/* --- STATE VACÍO --- */}
       {filteredMovies.length === 0 && (
         <div className="text-center py-20">
-          <p className="text-zinc-500 text-lg">No encontramos nada con &quot;{searchTerm}&quot; 😔</p>
-          <button 
+          <p className="text-zinc-500 text-lg">
+            No encontramos nada con &quot;{searchTerm}&quot; 😔
+          </p>
+          <button
             onClick={() => setSearchTerm('')}
             className="mt-4 text-violet-400 hover:text-violet-300 text-sm font-medium"
           >

@@ -111,5 +111,8 @@ jobs:
           npx next typegen
           npx tsc --noEmit
 
+      - name: Run frontend unit tests
+        run: npm test
+
       - name: Build Next.js application
         run: npm run build

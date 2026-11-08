@@ -12,7 +12,10 @@ interface CinemaSelectorProps {
   movieId: number;
 }
 
-export default function CinemaSelector({ cinemas, movieId }: CinemaSelectorProps) {
+export default function CinemaSelector({
+  cinemas,
+  movieId,
+}: CinemaSelectorProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const currentCinemaId = searchParams.get('cinemaId') || 'all';
@@ -20,15 +23,16 @@ export default function CinemaSelector({ cinemas, movieId }: CinemaSelectorProps
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newCinemaId = e.target.value;
     const params = new URLSearchParams(searchParams.toString());
-    
+
     if (newCinemaId === 'all') {
       params.delete('cinemaId'); // Si elige "Todos", sacamos el filtro de la URL
     } else {
       params.set('cinemaId', newCinemaId);
     }
-    
+
     // Navegamos a la misma página pero con la URL actualizada (sin perder la fecha)
-    router.push(`/movie/${movieId}?${params.toString()}`);
+    const query = params.toString();
+    router.push(query ? `/movie/${movieId}?${query}` : `/movie/${movieId}`);
   };
 
   return (

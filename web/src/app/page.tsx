@@ -5,14 +5,14 @@ import BillboardFilters from '@/components/movies/BillboardFilters';
 const ZONES = ['CABA', 'GBA Norte', 'GBA Oeste', 'GBA Sur', 'Interior'];
 
 interface HomeProps {
-  searchParams: Promise<{ zone?: string; chainId?: string }>;
+  searchParams: Promise<{ zone?: string; chainId?: string; date?: string }>;
 }
 
 export default async function Home({ searchParams }: HomeProps) {
-  const { zone, chainId } = await searchParams;
+  const { zone, chainId, date } = await searchParams;
 
   const [movies, chains] = await Promise.all([
-    getNowPlaying({ zone, chainId }),
+    getNowPlaying({ zone, chainId, date }),
     getCinemas(),
   ]);
 
@@ -32,7 +32,7 @@ export default async function Home({ searchParams }: HomeProps) {
         chains={(chains ?? []).map(({ id, name }) => ({ id, name }))}
       />
 
-      <MovieDashboard initialMovies={movies} />
+      <MovieDashboard initialMovies={movies} selectedDate={date} />
     </div>
   );
 }

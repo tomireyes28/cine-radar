@@ -132,6 +132,7 @@ export default async function CinemaDetailPage({
                 variant="now-playing"
                 priority={index < 5}
                 cinemaId={id}
+                date={selectedDate}
               />
             ))}
           </div>
