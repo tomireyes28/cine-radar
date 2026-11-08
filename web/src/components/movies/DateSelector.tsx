@@ -6,7 +6,7 @@ import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { clsx } from 'clsx';
 import { motion } from 'framer-motion';
-import { buildDateRange, getTodayArgentina } from '@/lib/dates';
+import { buildDateRange, resolveSelectedDate } from '@/lib/dates';
 
 interface DateSelectorProps {
   movieId?: number;
@@ -16,7 +16,7 @@ interface DateSelectorProps {
 export default function DateSelector({ movieId, baseUrl }: DateSelectorProps) {
   const searchParams = useSearchParams();
 
-  const selectedDate = searchParams.get('date') ?? getTodayArgentina();
+  const selectedDate = resolveSelectedDate(searchParams.get('date'));
   const days = buildDateRange(7);
 
   const targetBase = baseUrl ?? (movieId ? `/movie/${movieId}` : '');

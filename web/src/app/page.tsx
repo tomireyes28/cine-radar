@@ -1,15 +1,27 @@
 import { getCinemas, getNowPlaying } from '@/lib/api';
+import {
+  isValidCalendarDate,
+  sanitizePositiveIntParam,
+  sanitizeStringParam,
+} from '@/lib/dates';
 import MovieDashboard from '@/components/movies/MovieDashboard';
 import BillboardFilters from '@/components/movies/BillboardFilters';
 
 const ZONES = ['CABA', 'GBA Norte', 'GBA Oeste', 'GBA Sur', 'Interior'];
 
 interface HomeProps {
-  searchParams: Promise<{ zone?: string; chainId?: string; date?: string }>;
+  searchParams: Promise<{
+    zone?: string | string[];
+    chainId?: string | string[];
+    date?: string | string[];
+  }>;
 }
 
 export default async function Home({ searchParams }: HomeProps) {
-  const { zone, chainId, date } = await searchParams;
+  const rawParams = await searchParams;
+  const zone = sanitizeStringParam(rawParams.zone);
+  const chainId = sanitizePositiveIntParam(rawParams.chainId);
+  const date = isValidCalendarDate(rawParams.date) ? rawParams.date : undefined;
 
   const [movies, chains] = await Promise.all([
     getNowPlaying({ zone, chainId, date }),

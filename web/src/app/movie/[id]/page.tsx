@@ -1,22 +1,38 @@
 import Image from 'next/image';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Clock, MapPin, Star, Ticket } from 'lucide-react';
 import { clsx } from 'clsx';
 import { getMovieDetail } from '@/lib/api';
-import { formatTimeAR, getTodayArgentina } from '@/lib/dates';
+import {
+  formatTimeAR,
+  getTodayArgentina,
+  isValidPositiveInt4,
+  resolveSelectedDate,
+  sanitizePositiveIntParam,
+} from '@/lib/dates';
 import DateSelector from '@/components/movies/DateSelector';
 import CinemaSelector from '@/components/movies/CinemaSelector';
 import { CinemaGroup } from '@/types/movie';
 
 interface PageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ date?: string; cinemaId?: string }>;
+  searchParams: Promise<{
+    date?: string | string[];
+    cinemaId?: string | string[];
+  }>;
 }
 
 export async function generateMetadata({ params }: Pick<PageProps, 'params'>) {
   const { id } = await params;
+  if (!isValidPositiveInt4(id)) {
+    return {
+      title: 'Película no encontrada | Cine Radar',
+      description: 'La función solicitada no está disponible en cartelera.',
+    };
+  }
   const movie = await getMovieDetail(id);
   if (!movie) {
     return {
@@ -60,9 +76,15 @@ export default async function MovieDetailPage({
   searchParams,
 }: PageProps) {
   const { id } = await params;
-  const { date, cinemaId } = await searchParams;
+  if (!isValidPositiveInt4(id)) {
+    notFound();
+  }
 
-  const movie = await getMovieDetail(id, date);
+  const rawParams = await searchParams;
+  const selectedDate = resolveSelectedDate(rawParams.date);
+  const cinemaId = sanitizePositiveIntParam(rawParams.cinemaId);
+
+  const movie = await getMovieDetail(id, selectedDate);
 
   if (!movie) {
     return (
@@ -84,12 +106,10 @@ export default async function MovieDetailPage({
     name: cg.cinema.name,
   }));
 
-  const filteredCinemas =
-    cinemaId && cinemaId !== 'all'
-      ? movie.cinemas.filter((cg) => cg.cinema.id.toString() === cinemaId)
-      : movie.cinemas;
+  const filteredCinemas = cinemaId
+    ? movie.cinemas.filter((cg) => cg.cinema.id.toString() === cinemaId)
+    : movie.cinemas;
 
-  const selectedDate = date ?? getTodayArgentina();
   const displayDate = format(parseISO(selectedDate), "EEEE d 'de' MMMM", {
     locale: es,
   });

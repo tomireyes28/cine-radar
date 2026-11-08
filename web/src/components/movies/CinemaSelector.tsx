@@ -1,6 +1,7 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
+import { isValidPositiveInt4 } from '@/lib/dates';
 
 interface Cinema {
   id: number;
@@ -18,7 +19,10 @@ export default function CinemaSelector({
 }: CinemaSelectorProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const currentCinemaId = searchParams.get('cinemaId') || 'all';
+  const rawCinemaId = searchParams.get('cinemaId');
+  const currentCinemaId = isValidPositiveInt4(rawCinemaId)
+    ? rawCinemaId
+    : 'all';
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newCinemaId = e.target.value;

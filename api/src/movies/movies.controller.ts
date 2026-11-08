@@ -3,7 +3,6 @@ import {
   Get,
   NotFoundException,
   Param,
-  ParseIntPipe,
   Query,
 } from '@nestjs/common';
 import {
@@ -16,6 +15,7 @@ import { MoviesService } from './movies.service';
 import { GetMoviesDto } from './dto/get-movie.dto';
 import { GeoService } from './geo.service';
 import { NearbyCinemasDto } from './dto/nearby-cinemas.dto';
+import { PositiveIntPipe } from '../common/pipes/positive-int.pipe';
 
 @ApiTags('movies')
 @Controller('movies')
@@ -74,7 +74,7 @@ export class MoviesController {
   @ApiResponse({ status: 200, description: 'Detalle de película y cines con sus funciones' })
   @ApiResponse({ status: 404, description: 'Película no encontrada' })
   async getMovieDetail(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', PositiveIntPipe) id: number,
     @Query() filters: GetMoviesDto,
   ) {
     const movie = await this.moviesService.getMovieDetail(id, filters);

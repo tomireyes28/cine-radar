@@ -12,6 +12,7 @@ import { TmdbService } from '../tmdb/tmdb.service';
 import {
   getArgentinaDayRange,
   getArgentinaTodayDateString,
+  isValidPositiveInt4String,
 } from '../common/utils/argentina-time.util';
 
 interface CacheEntry<T> {
@@ -60,8 +61,12 @@ export class MoviesService {
     const cached = this.getFromCache<NowPlayingMovieItem[]>(cacheKey);
     if (cached) return cached;
 
-    const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
-    const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
+    const parsedChainId = isValidPositiveInt4String(chainId)
+      ? Number(chainId)
+      : undefined;
+    const parsedCinemaId = isValidPositiveInt4String(cinemaId)
+      ? Number(cinemaId)
+      : undefined;
 
     const locationWhere = {
       name: city ? { contains: city, mode: 'insensitive' as const } : undefined,
@@ -176,8 +181,12 @@ export class MoviesService {
 
     if (!movie) return null;
 
-    const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
-    const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
+    const parsedChainId = isValidPositiveInt4String(chainId)
+      ? Number(chainId)
+      : undefined;
+    const parsedCinemaId = isValidPositiveInt4String(cinemaId)
+      ? Number(cinemaId)
+      : undefined;
 
     const showtimes = await this.prisma.showtime.findMany({
       where: {

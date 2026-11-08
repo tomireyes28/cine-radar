@@ -6,16 +6,19 @@ import { MapPin, Film, ChevronRight, Navigation, Calendar } from 'lucide-react';
 import MovieCard from '@/components/movies/MovieCard';
 import DateSelector from '@/components/movies/DateSelector';
 import { getCinemaById, getMoviesForCinema } from '@/lib/api';
-import { getTodayArgentina } from '@/lib/dates';
+import { isValidPositiveInt4, resolveSelectedDate } from '@/lib/dates';
 import { Movie } from '@/types/movie';
 
 interface TheaterPageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ date?: string }>;
+  searchParams: Promise<{ date?: string | string[] }>;
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  if (!isValidPositiveInt4(id)) {
+    return { title: 'Cine no encontrado | Cine Radar' };
+  }
   const cinema = await getCinemaById(id);
   if (!cinema) return { title: 'Cine no encontrado | Cine Radar' };
   return {
@@ -33,9 +36,13 @@ export default async function CinemaDetailPage({
   searchParams,
 }: TheaterPageProps) {
   const { id } = await params;
+  if (!isValidPositiveInt4(id)) {
+    notFound();
+  }
+
   const { date } = await searchParams;
 
-  const selectedDate = date ?? getTodayArgentina();
+  const selectedDate = resolveSelectedDate(date);
 
   const [cinema, movies] = await Promise.all([
     getCinemaById(id),
