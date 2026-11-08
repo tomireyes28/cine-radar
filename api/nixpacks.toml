@@ -11,6 +11,6 @@ cmds = ["npm ci", "npx prisma generate", "npm run build"]
 cmd = "npm run start:prod"
 
 [variables]
-PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PUPPETEER_SKIP_DOWNLOAD = "true"
 DISABLE_INTERNAL_CRON = "true"
 NODE_ENV = "production"

@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from '../app.module';
+import { ScraperWorkerModule } from '../scraper/scraper-worker.module';
 import { ScraperOrchestratorService } from '../scraper/services/scraper-orchestrator.service';
 import {
   parseCliChainArg,
@@ -13,9 +13,12 @@ async function bootstrap(): Promise<0 | 1> {
     process.env.CHAIN_KEY,
   );
 
-  const appContext = await NestFactory.createApplicationContext(AppModule, {
-    logger: ['log', 'warn', 'error'],
-  });
+  const appContext = await NestFactory.createApplicationContext(
+    ScraperWorkerModule,
+    {
+      logger: ['log', 'warn', 'error'],
+    },
+  );
 
   try {
     const orchestrator = appContext.get(ScraperOrchestratorService);

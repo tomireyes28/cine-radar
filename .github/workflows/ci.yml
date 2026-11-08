@@ -36,7 +36,6 @@ jobs:
 
     env:
       PUPPETEER_SKIP_DOWNLOAD: 'true'
-      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
       DATABASE_URL: postgresql://postgres:ci_password@localhost:5432/cine_radar_ci
       ADMIN_API_KEY: ci-admin-api-key-placeholder
       TMDB_API_KEY: ci-tmdb-api-key-placeholder

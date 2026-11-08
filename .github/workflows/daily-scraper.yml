@@ -37,7 +37,7 @@ jobs:
         working-directory: ./api
 
     env:
-      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
       PUPPETEER_EXECUTABLE_PATH: '/usr/bin/google-chrome-stable'
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
