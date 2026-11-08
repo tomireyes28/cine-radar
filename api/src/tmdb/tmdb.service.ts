@@ -1,14 +1,22 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import {
+  extractReleaseYearHint,
+  normalizeCinemaTitle,
+  toComparableTitleKey,
+} from '../common/utils/title-normalizer.util';
+import { getArgentinaTodayDateString } from '../common/utils/argentina-time.util';
 
 export interface TmdbMovieSearchItem {
   id: number;
   title: string;
+  original_title?: string;
   poster_path: string | null;
   backdrop_path?: string | null;
   release_date: string;
   overview?: string;
   vote_average?: number;
+  popularity?: number;
 }
 
 interface TmdbSearchResponse {
@@ -44,6 +52,73 @@ export type TmdbLookupResult =
   | { status: 'not_found' }
   | { status: 'transient_error'; reason: string };
 
+/**
+ * Ranks TMDB search candidates using exact normalized title matching, optional
+ * explicit release-year hints, active theatrical window preference, and metadata completeness,
+ * instead of blindly trusting `results[0]`.
+ */
+export function selectBestTmdbCandidate(
+  results: readonly TmdbMovieSearchItem[],
+  cleanedQuery: string,
+  yearHint?: number,
+  currentYear: number = Number(getArgentinaTodayDateString().slice(0, 4)),
+): TmdbMovieSearchItem {
+  const queryKey = toComparableTitleKey(cleanedQuery);
+
+  let bestCandidate = results[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+
+  for (let index = 0; index < results.length; index++) {
+    const candidate = results[index];
+    let score = -index * 2; // Gentle tiebreaker preserving upstream relevance order
+
+    const titleKey = toComparableTitleKey(candidate.title || '');
+    const originalKey = toComparableTitleKey(candidate.original_title || '');
+
+    if (queryKey && (titleKey === queryKey || originalKey === queryKey)) {
+      score += 100;
+    } else if (
+      queryKey &&
+      (titleKey.startsWith(`${queryKey} `) ||
+        originalKey.startsWith(`${queryKey} `))
+    ) {
+      score += 30;
+    }
+
+    const releaseYear = candidate.release_date
+      ? Number(candidate.release_date.slice(0, 4))
+      : NaN;
+
+    if (!Number.isNaN(releaseYear)) {
+      if (yearHint !== undefined) {
+        const diff = Math.abs(releaseYear - yearHint);
+        if (diff === 0) {
+          score += 120;
+        } else if (diff === 1) {
+          score += 60;
+        }
+      } else {
+        // Without an explicit year hint, favor active theatrical releases over old homonyms/silent-era films
+        if (releaseYear >= currentYear - 1 && releaseYear <= currentYear + 1) {
+          score += 45;
+        } else if (releaseYear >= currentYear - 3 && releaseYear < currentYear - 1) {
+          score += 20;
+        }
+      }
+    }
+
+    if (candidate.poster_path) score += 5;
+    if (candidate.overview) score += 3;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCandidate = candidate;
+    }
+  }
+
+  return bestCandidate;
+}
+
 @Injectable()
 export class TmdbService {
   private readonly logger = new Logger(TmdbService.name);
@@ -60,30 +135,20 @@ export class TmdbService {
     return process.env.TMDB_API_KEY;
   }
 
-  private cleanTitle(rawTitle: string): string {
-    let cleaned = rawTitle
-      .split('|')[0]
-      .split(' - ')[0]
-      .replace(/\(.*?\)/g, ' ')
-      .replace(/:([^\s])/g, ': $1')
-      .replace(/[-_]/g, ' ');
-    const regex =
-      /\b(3D|2D|XD|4D|IMAX|ATMOS|D-BOX|DBOX|DOBLADA|DOBLADO|SUBTITULADA|SUBTITULADO|CASTELLANO|CAST|SUBT|SUB|LATINO|MACROXE|COMFORT|PLATINUM|VIP|48FPS)\b/gi;
-    cleaned = cleaned.replace(regex, ' ');
-    return cleaned.replace(/\s+/g, ' ').trim();
-  }
-
   /**
    * Distinguishes between a confirmed match, a confirmed absence in TMDB (HTTP 200 empty),
    * and transient infrastructure/configuration errors (never cached as negative results).
    */
   async lookupMovie(rawTitle: string): Promise<TmdbLookupResult> {
-    const cleanedTitle = this.cleanTitle(rawTitle);
+    const yearHint = extractReleaseYearHint(rawTitle);
+    const cleanedTitle = normalizeCinemaTitle(rawTitle);
     if (!cleanedTitle) {
       return { status: 'not_found' };
     }
 
-    const cacheKey = cleanedTitle.toLowerCase();
+    const cacheKey = yearHint
+      ? `${cleanedTitle.toLowerCase()}#${yearHint}`
+      : cleanedTitle.toLowerCase();
     if (this.searchCache.has(cacheKey)) {
       const cached = this.searchCache.get(cacheKey) ?? null;
       return cached
@@ -129,26 +194,30 @@ export class TmdbService {
         return { status: 'not_found' };
       }
 
-      const topMatch = results[0];
-      const details = await this.fetchMovieDetails(topMatch.id);
+      const bestMatch = selectBestTmdbCandidate(
+        results,
+        cleanedTitle,
+        yearHint,
+      );
+      const details = await this.fetchMovieDetails(bestMatch.id);
 
       const resolved: TmdbResolvedMovie = {
-        tmdbId: topMatch.id,
-        officialTitle: details?.title || topMatch.title,
+        tmdbId: bestMatch.id,
+        officialTitle: details?.title || bestMatch.title,
         posterUrl:
-          details?.poster_path || topMatch.poster_path
-            ? `https://image.tmdb.org/t/p/w500${details?.poster_path || topMatch.poster_path}`
+          details?.poster_path || bestMatch.poster_path
+            ? `https://image.tmdb.org/t/p/w500${details?.poster_path || bestMatch.poster_path}`
             : null,
         backdropUrl:
-          details?.backdrop_path || topMatch.backdrop_path
-            ? `https://image.tmdb.org/t/p/w1280${details?.backdrop_path || topMatch.backdrop_path}`
+          details?.backdrop_path || bestMatch.backdrop_path
+            ? `https://image.tmdb.org/t/p/w1280${details?.backdrop_path || bestMatch.backdrop_path}`
             : null,
-        overview: details?.overview || topMatch.overview || null,
-        releaseDate: details?.release_date || topMatch.release_date || null,
+        overview: details?.overview || bestMatch.overview || null,
+        releaseDate: details?.release_date || bestMatch.release_date || null,
         duration: details?.runtime || null,
         rating:
-          (details?.vote_average ?? topMatch.vote_average)
-            ? Number(details?.vote_average ?? topMatch.vote_average).toFixed(1)
+          (details?.vote_average ?? bestMatch.vote_average)
+            ? Number(details?.vote_average ?? bestMatch.vote_average).toFixed(1)
             : null,
         genres: details?.genres?.map((g) => g.name) ?? [],
       };
