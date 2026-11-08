@@ -3,6 +3,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { buildCorsOptions } from './common/config/cors.config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -14,35 +15,7 @@ async function bootstrap() {
     }),
   );
 
-  const configuredOrigins = (process.env.FRONTEND_URL || '')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
-  const allowedOrigins = Array.from(
-    new Set([
-      'https://cinema-agenda-app.vercel.app',
-      'http://localhost:3000',
-      ...configuredOrigins,
-    ]),
-  );
-
-  app.enableCors({
-    origin: (origin, callback) => {
-      // Allow server-to-server requests (no Origin header) or whitelisted origins
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.endsWith('.vercel.app')
-      ) {
-        callback(null, true);
-      } else {
-        callback(new Error(`Origin ${origin} not allowed by CORS`));
-      }
-    },
-    methods: 'GET,HEAD,POST,OPTIONS',
-    credentials: true,
-  });
+  app.enableCors(buildCorsOptions(process.env.FRONTEND_URL));
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -86,4 +59,4 @@ async function bootstrap() {
   console.log(`Cine Radar API running on: http://localhost:${port}`);
   console.log(`Swagger Docs available at: http://localhost:${port}/docs`);
 }
-bootstrap();
+void bootstrap();
