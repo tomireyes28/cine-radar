@@ -1,98 +1,51 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Cine Radar — Backend API & Scraper Worker (`/api`)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Servicio backend construido con **NestJS 11**, **Prisma 6** y **PostgreSQL 15**. Expone la API REST pública de cartelera y provee el worker CLI desacoplado (`ScraperWorkerModule`) encargado de sincronizar las 6 cadenas de cine configuradas (68 complejos).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Variables de Entorno
 
-## Description
+Copiar [`api/.env.example`](./.env.example) a `api/.env`:
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+| Variable | Requerida | Descripción |
+| :--- | :---: | :--- |
+| `DATABASE_URL` | Sí | Cadena de conexión PostgreSQL (`localhost:5434` en Docker local o `:6543?pgbouncer=true` en Supabase). |
+| `TMDB_API_KEY` | Sí | API Key v3 de The Movie Database para resolución de títulos y próximos estrenos. |
+| `ADMIN_API_KEY` | Sí | Clave secreta validada en tiempo constante (`x-api-key`) para endpoints administrativos. |
+| `PORT` | No | Puerto HTTP del servidor (por defecto `3001`). |
+| `FRONTEND_URL` | No | Lista separada por comas de orígenes CORS exactos permitidos. |
+| `ENABLE_HTTP_SCRAPER` | No | Mantener en `"false"` en contenedores HTTP; habilita `POST /scraper/*` solo si es `"true"`. |
+| `DISABLE_INTERNAL_CRON` | No | En `"true"` desactiva el `@Cron` interno cuando la ejecución corre en GitHub Actions. |
+| `TRUST_PROXY` | No | Saltos de proxy reverso para `@nestjs/throttler` (`1` por defecto en `production`, `false` en local). |
+| `CINEPOLIS_PUBLIC_API_KEY` | No | Permite sobreescribir la clave pública de storefront GraphQL de Cinépolis si rota en origen. |
 
-## Project setup
+## Comandos Principales
 
 ```bash
-$ npm install
+npm ci                        # Instalación reproducible
+npx prisma migrate deploy     # Aplica las migraciones SQL versionadas
+npm run db:seed               # Carga declarativa de 6 cadenas y 68 complejos
+npm run build                 # Compila TypeScript en dist/
+npm run start:dev             # Levanta la API en modo watch (http://localhost:3001)
+npm run start:prod            # Ejecuta node dist/src/main.js
+
+# Ejecución del Worker CLI (requiere haber ejecutado npm run build antes para scrape:prod)
+npm run scrape                # Desarrollo (ts-node): todas las cadenas
+npm run scrape -- atlas       # Desarrollo: una sola cadena (atlas|multiplex|showcase|cinemark|cinemacenter|cinepolis)
+npm run scrape:prod           # Producción (node dist/cli/run-scrapers.js)
+
+# Calidad y pruebas
+npm run lint:check            # ESLint estricto (--max-warnings=0)
+npm test                      # Suite unitaria con fixtures locales
+npm run test:e2e              # Contratos HTTP, CORS, validación y /health
 ```
 
-## Compile and run the project
+## Endpoints Principales
 
-```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
-```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- `GET /` — Liveness ligero del proceso.
+- `GET /health` — Readiness de PostgreSQL (`SELECT 1`), frescura de funciones futuras y último `ScrapeRun` (`503` si la base no responde).
+- `GET /docs` — Documentación interactiva OpenAPI / Swagger.
+- `GET /movies/now-playing` — Cartelera filtrable por `date` (`YYYY-MM-DD`), `zone` y `chainId`.
+- `GET /movies/:id` — Detalle de película y horarios agrupados por complejo para una `date`.
+- `GET /movies/cinemas` · `GET /movies/cinemas/:id` · `GET /movies/cinemas/:id/movies` — Catálogo y cartelera por sede.
+- `GET /movies/nearby?lat=...&lng=...` — Complejos cercanos ordenados por distancia Haversine.
+- `GET /movies/upcoming` — Próximos estrenos en Argentina vía TMDB (`503` explícito ante falla upstream).

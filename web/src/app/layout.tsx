@@ -59,6 +59,16 @@ export default function RootLayout({
       >
         <Navbar />
         <main className="pt-20 pb-24 md:pb-10 min-h-screen">{children}</main>
+        <footer className="border-t border-zinc-900 py-6 pb-24 md:pb-6 text-center text-xs text-zinc-500 px-4">
+          <p>
+            Horarios sincronizados diariamente con fines informativos. Verificá
+            disponibilidad final en el sitio oficial de cada complejo.
+          </p>
+          <p className="mt-1">
+            This product uses the TMDB API but is not endorsed or certified by
+            TMDB.
+          </p>
+        </footer>
       </body>
     </html>
   );

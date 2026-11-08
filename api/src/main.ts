@@ -37,7 +37,7 @@ async function bootstrap() {
     customSiteTitle: 'Cine Radar API | Documentación Swagger',
   });
 
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT ?? 3001;
   await app.listen(port);
   console.log(`Cine Radar API running on: http://localhost:${port}`);
   console.log(`Swagger Docs available at: http://localhost:${port}/docs`);

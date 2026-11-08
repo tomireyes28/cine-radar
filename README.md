@@ -1,6 +1,18 @@
-# 🎬 Cine Radar — Agregador de Cartelera de Cines en Tiempo Real
+# 🎬 Cine Radar — Agregador de Cartelera de Cines en Argentina
 
-**Cine Radar** es una plataforma Full-Stack que unifica en un solo lugar la cartelera, horarios, formatos (`2D`, `3D`, `IMAX`, `4D`, `XD`, `D-BOX`, `VIP`) y geolocalización de **65 complejos de las 6 cadenas de cine más grandes de Argentina** (*Cinemark Hoyts, Cinépolis, Showcase, Atlas Cines, Multiplex y Cinema Center*), enriqueciendo cada título con metadata oficial de **TMDB**.
+**Cine Radar** es una plataforma Full-Stack que consolida en una sola interfaz la cartelera, funciones multi-día, formatos (`2D`, `3D`, `IMAX`, `4D`, `XD`, `D-BOX`, `VIP`, `COMFORT`), idiomas y geolocalización de **68 complejos pertenecientes a 6 cadenas de cine de Argentina**, enriqueciendo cada título con metadatos oficiales de **TMDB**.
+
+| Cadena | Complejos configurados | Mecanismo de recolección |
+| :--- | :---: | :--- |
+| **Cinemark Hoyts** | 22 | API BFF JSON directa (`api-ar.cinemarkhoyts.com.ar`) |
+| **Cinema Center** | 17 | Endpoint AJAX HTML + `cheerio` por ciudad |
+| **Cinépolis** | 10 | GraphQL Storefront v2 en contexto aislado de navegador (`puppeteer`) |
+| **Showcase** | 7 *(8 feeds incl. IMAX Norcenter)* | API JSON VoyAlCine (`entradas.todoshowcase.com`) |
+| **Atlas Cines** | 7 | API REST JSON por complejo |
+| **Multiplex** | 5 | HTML SSR + `cheerio` |
+| **Total** | **68 complejos** | Sincronización programada diaria (`04:00 ART`) |
+
+> **Alcance de actualización:** La plataforma **no** realiza scraping en vivo durante las peticiones de los usuarios. Un worker CLI programado sincroniza diariamente la cartelera hacia PostgreSQL a las `04:00` (`America/Argentina/Buenos_Aires`), y la API REST sirve lecturas rápidas sobre ese snapshot validado.
 
 ---
 
@@ -8,91 +20,124 @@
 
 ```mermaid
 flowchart LR
-    subgraph GH["GitHub Actions (Cron Diario 04:00 AM ARG)"]
-        CLI["CLI Runner (run-scrapers.ts)"]
+    subgraph GH["GitHub Actions (Cron Diario 04:00 ART)"]
+        CLI["Worker CLI (run-scrapers.ts)\nScraperWorkerModule"]
         Orch["ScraperOrchestratorService"]
-        HTTP["Scrapers HTTP/JSON Directo:\n• Cinemark (BFF API)\n• Showcase (VoyAlCine API)\n• Atlas (REST JSON)\n• Multiplex (Cheerio SSR)\n• Cinema Center (AJAX POST)"]
-        GQL["Scraper Stealth GraphQL:\n• Cinépolis (GraphQL v2)"]
-        CLI --> Orch --> HTTP & GQL
+        HTTP["5 Scrapers HTTP / Cheerio:\nCinemark · Showcase · Atlas\nMultiplex · Cinema Center"]
+        Browser["1 Scraper con Navegador:\nCinépolis (GraphQL v2)"]
+        CLI --> Orch --> HTTP & Browser
     end
 
-    subgraph Cloud["Infraestructura Productiva"]
-        DB[("Supabase PostgreSQL\nSupavisor Pooler (6543)")]
-        API["NestJS 11 REST API\n(Railway ~50 MB RAM)"]
-        Web["Next.js 16 App Router\n(Vercel ISR + SSR)"]
+    subgraph Runtime["Servicios Productivos"]
+        DB[("PostgreSQL 15\n(Docker local :5434 / Supabase :6543)")]
+        API["NestJS 11 HTTP API\n(AppModule sin worker activo)"]
+        Web["Next.js 16 App Router\n(SSR + Revalidación acotada)"]
     end
 
-    Orch -->|Batch createMany + Upsert| DB
-    Orch <-->|In-Memory Cache + Metadata| TMDB["TMDB API v3"]
-    Web <-->|REST + ISR Revalidation| API
-    API <-->|Prisma ORM| DB
+    Orch -->|Sync transaccional y diferencial + ScrapeRun| DB
+    Orch <-->|Caché LRU+TTL + Ranking| TMDB["TMDB API v3"]
+    Web <-->|REST JSON + Timeout acotado| API
+    API <-->|Prisma ORM 6| DB
 ```
 
 ---
 
-## 🧠 Decisiones de Ingeniería y Optimización de Costos
+## 🧠 Decisiones Técnicas e Integridad Operativa
 
-### 1. Reducción del ~90% en Consumo de RAM/CPU en la Nube
-Originalmente, ejecutar múltiples instancias de Chromium (`Puppeteer`) dentro del contenedor web de la API generaba picos de **600–900 MB de RAM**. Se rediseñó la arquitectura en dos niveles:
-- **Ingeniería inversa de APIs y BFFs**: Se reemplazó la automatización de navegador en **5 de las 6 cadenas** (*Cinemark, Showcase, Cinema Center, Atlas y Multiplex*) por peticiones HTTP directas a sus APIs internas JSON/AJAX + `cheerio`, reduciendo el uso de Chromium en esas cadenas a **0 MB** y recolectando **+18.000 horarios multi-día en ~3 minutos**.
-- **Desacoplamiento del Worker a GitHub Actions**: El proceso pesado de recolección corre de forma desatendida en runners gratuitos de **GitHub Actions** ([`.github/workflows/daily-scraper.yml`](./.github/workflows/daily-scraper.yml)), mientras que el contenedor en Railway ejecuta únicamente el servidor HTTP de NestJS sin Chrome ([`api/nixpacks.toml`](./api/nixpacks.toml)), manteniendo un consumo estable de **~50 MB de RAM**.
+### 1. Reemplazo Transaccional y Sincronización Diferencial
+- **Atomicidad por sede (`prisma.$transaction`)**: La actualización de horarios de cada complejo ocurre dentro de una transacción acotada al rango de días cubierto por la extracción, evitando dejar un cine vacío si falla una escritura intermedia.
+- **Sincronización diferencial (`M2`)**: Antes de reescribir una sede, el orquestador compara las claves compuestas `(movieId, dateTime, format, language)` y `ticketUrl` entrantes contra el rango existente; si el snapshot no cambió, omite `DELETE` e `INSERT` por completo.
+- **Contrato explícito de 4 estados (`complete` · `empty_verified` · `partial` · `failed`)**: Distingue una cartelera genuinamente vacía (`empty_verified`) de una caída de red o cambio de esquema (`failed` / `partial`). Ante fallos parciales o totales, se preservan las funciones vigentes y el CLI devuelve código de salida distinto de cero para alertar en CI.
 
-### 2. Principios SOLID y Patrones de Diseño (Backend NestJS)
-- **Strategy Pattern (`ICinemaScraper`)**: Cada cadena de cine implementa el contrato único [`ICinemaScraper`](./api/src/scraper/interfaces/scraper.interface.ts) y se limita exclusivamente a extraer datos crudos (*Single Responsibility Principle*).
-- **Orchestrator Pattern (`ScraperOrchestratorService`)**: [`ScraperOrchestratorService`](./api/src/scraper/services/scraper-orchestrator.service.ts) coordina todas las estrategias, deduplica llamadas a `TmdbService` mediante caché en memoria y realiza inserciones masivas por lote (`prisma.showtime.createMany({ skipDuplicates: true })`), evitando el problema de queries *N+1*.
-- **Normalización Centralizada (`TitleNormalizerService`)**: [`TitleNormalizerService`](./api/src/scraper/services/title-normalizer.service.ts) limpia tokens técnicos (`2D`, `3D`, `IMAX`, `48FPS`, `ANIVERSARIO`), corrige codificaciones `ISO-8859-1` y resuelve alias locales antes de consultar TMDB.
+### 2. Concurrencia Segura sobre Connection Poolers
+- **Leases distribuidos en SQL (`ScraperLock`)**: En lugar de `pg_advisory_lock` de sesión (incompatible con PgBouncer/Supavisor en modo transacción `:6543`), el worker adquiere leases atómicos con expiración TTL en tabla PostgreSQL (`scraper:global` y `scraper:chain:<key>`).
+- **Separación efectiva entre API y Worker**:
+  - `AppModule` sirve tráfico HTTP con `ENABLE_HTTP_SCRAPER="false"` por defecto, cabeceras `Helmet`, CORS de orígenes exactos, validación estricta (`ValidationPipe` + pipes de enteros de 32 bits y fechas calendario reales) y `@nestjs/throttler` consciente de proxy (`TRUST_PROXY`).
+  - `ScraperWorkerModule` levanta únicamente los proveedores de extracción y persistencia para `run-scrapers.ts`, sin controladores HTTP, `ThrottlerModule` ni `ScheduleModule`. En despliegues de la API (`api/nixpacks.toml`) y CI se define `PUPPETEER_SKIP_DOWNLOAD="true"` para evitar descargas innecesarias de Chromium.
 
-### 3. Seguridad y Rendimiento en Base de Datos
-- **Defensa en profundidad**: Cabeceras HTTP seguras con `Helmet`, *Rate Limiting* global con `@nestjs/throttler` (100 req/min), validación estricta de DTOs con `class-validator` (`whitelist` + `forbidNonWhitelisted`), y protección de endpoints administrativos mediante [`ApiKeyGuard`](./api/src/common/guards/api-key.guard.ts) con comparación en tiempo constante (`crypto.timingSafeEqual`).
-- **Modelado e Indexación SQL ([`schema.prisma`](./api/prisma/schema.prisma))**:
-  - Constraint compuesto `@@unique([movieId, locationId, dateTime, format, language])` que garantiza idempotencia y cero funciones duplicadas.
-  - Índices compuestos `@@index([dateTime])`, `@@index([movieId, dateTime])` y `@@index([locationId, dateTime])` para consultas de cartelera en milisegundos.
-  - Separación de `DATABASE_URL` (Transaction Pooler puerto `6543`) y `DIRECT_URL` (Session/Migrations puerto `5432`) en Supabase.
-
----
-
-## 🛠️ Stack Tecnológico
-
-| Capa | Tecnologías |
-| :--- | :--- |
-| **Frontend (`/web`)** | Next.js 16 (App Router, Server Components, ISR), React 19, TypeScript 5, Tailwind CSS v4, Framer Motion, Lucide Icons, `date-fns` |
-| **Backend (`/api`)** | NestJS 11, TypeScript 5, Prisma ORM 6, Axios, Cheerio, Puppeteer Stealth (lazy-loaded), Helmet, `@nestjs/throttler`, Jest |
-| **Base de Datos & Infra** | PostgreSQL 15 (Supabase), GitHub Actions (Cron Worker), Railway (API), Vercel (Web) |
+### 3. Resolución Determinística de Películas y Resiliencia HTTP
+- **Identidad desacoplada (`MovieIdentityService`)**: Cada película posee `normalizedKey` único independiente de `tmdbId` (nullable) y estado `tmdbStatus` (`matched` | `not_found` | `pending`). Si TMDB falla transitoriamente durante el scraping, la función se publica con identidad local y se reconcilia automáticamente en corridas posteriores sin duplicar registros.
+- **Ranking de candidatos y caché acotada**: `TmdbService` puntúa coincidencias exactas normalizadas, pistas de año y ventana de estreno, deduplica promesas concurrentes (*in-flight*) y acota memoria con `BoundedTtlCache` (LRU + TTL diferenciado para aciertos y ausencias confirmadas).
+- **Observabilidad (`GET /health` y `ScrapeRun`)**: Separa liveness (`GET /`) de readiness real (`GET /health`, que verifica `SELECT 1` en PostgreSQL, cantidad de funciones futuras vigentes, horizonte cubierto y el resumen de la última corrida registrada en `ScrapeRun`).
 
 ---
 
-## 🚀 Ejecución Local
+## 🛠️ Stack y Requisitos
 
-### 1. Clonar y configurar variables de entorno
-Crear `api/.env` basándose en [`api/.env.example`](./api/.env.example) y `web/.env.local`:
+- **Node.js**: `22.x LTS` (requerido también para ejecutar la suite de tests nativos de `web` con `--experimental-strip-types`)
+- **Docker**: Docker Desktop / Engine con Compose v2 (para PostgreSQL 15 local)
+- **Backend (`/api`)**: NestJS 11, TypeScript 5, Prisma 6, Axios, Cheerio, Puppeteer Extra Stealth, Jest + Supertest
+- **Frontend (`/web`)**: Next.js 16 (App Router), React 19, Tailwind CSS v4, Radix UI (`Dialog`), Framer Motion, `date-fns`
 
+---
+
+## 🚀 Puesta en Marcha Local (Paso a Paso Verificado)
+
+El entorno local utiliza **puertos separados** para evitar colisiones:
+- **PostgreSQL (Docker)**: `localhost:5434`
+- **Backend API (NestJS)**: `http://localhost:3001` (Swagger en `http://localhost:3001/docs`)
+- **Frontend Web (Next.js)**: `http://localhost:3000`
+
+### 1. Levantar PostgreSQL local con Docker
+Desde la raíz del repositorio:
 ```bash
-# api/.env
-DATABASE_URL="postgresql://postgres.[REF]:[PASS]@aws-0-us-east-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
-DIRECT_URL="postgresql://postgres.[REF]:[PASS]@aws-0-us-east-1.pooler.supabase.com:5432/postgres"
-TMDB_API_KEY="tu_api_key_de_tmdb"
-ADMIN_API_KEY="tu_clave_secreta_admin"
-FRONTEND_URL="http://localhost:3000"
+docker compose up -d
 ```
 
+### 2. Configurar variables de entorno
+Copiar las plantillas incluidas en ambos paquetes:
 ```bash
-# web/.env.local
-NEXT_PUBLIC_API_URL="http://localhost:3000"
+cp api/.env.example api/.env
+cp web/.env.example web/.env.local
 ```
+Editar `api/.env` completando `TMDB_API_KEY` (obtener en [themoviedb.org](https://www.themoviedb.org/settings/api)) y un valor aleatorio para `ADMIN_API_KEY`. La URL de base de datos por defecto en `api/.env.example` ya apunta al contenedor local en `localhost:5434`.
 
-### 2. Iniciar Backend (`/api`)
+### 3. Instalar, migrar, poblar catálogo e iniciar la API (`/api`)
 ```bash
 cd api
-npm install
-npx prisma db push
-npm run db:seed       # Carga declarativa de las 6 cadenas y 65+ complejos geolocalizados
-npm run scrape:prod   # Pobla la cartelera completa (oej: node dist/cli/run-scrapers.js cinemark)
-npm run start:dev
+npm ci
+npx prisma migrate deploy   # Aplica todas las migraciones versionadas en orden
+npm run db:seed             # Carga las 6 cadenas y los 68 complejos geolocalizados
+npm run build               # Compila dist/ (requerido antes de scrape:prod)
+npm run scrape:prod         # Opcional: pobla cartelera (ej. una cadena: node dist/cli/run-scrapers.js atlas)
+npm run start:dev           # Inicia la API en http://localhost:3001
 ```
+> **Nota sobre `Cinépolis` en local:** Las 5 cadenas HTTP (`atlas`, `multiplex`, `showcase`, `cinemark`, `cinemacenter`) funcionan sin navegador externo. Para recolectar `cinepolis` localmente se requiere Google Chrome/Chromium instalado y definir `PUPPETEER_EXECUTABLE_PATH` apuntando al binario local si se instaló con `PUPPETEER_SKIP_DOWNLOAD="true"`.
 
-### 3. Iniciar Frontend (`/web`)
+### 4. Instalar e iniciar el Frontend (`/web`)
+En una segunda terminal:
 ```bash
 cd web
-npm install
-npm run dev
+npm ci
+npm run dev                 # Inicia Next.js en http://localhost:3000
 ```
+
+---
+
+## 🧪 Verificación y Calidad (CI)
+
+El workflow [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) valida cada Pull Request sobre PostgreSQL 15 efímero sin tocar servicios externos:
+
+```bash
+# Backend (/api)
+cd api
+npm run lint:check          # ESLint sin warnings ni mutación de archivos
+npm test                    # Tests unitarios (scrapers con fixtures locales, orquestador, caché, DTOs)
+npm run test:e2e            # Contratos HTTP, CORS, validación y readiness /health
+npm run build
+
+# Frontend (/web)
+cd ../web
+npm run lint
+npx next typegen && npx tsc --noEmit
+npm test                    # Tests de cliente API, sanitización de fechas/IDs y recorrido de usuario
+npm run build
+```
+
+---
+
+## ⚠️ Limitaciones Conocidas y Avisos Legales
+
+- **Cobertura y fuentes externas**: Los horarios provienen de sitios y endpoints públicos de exhibidores terceros cuyas estructuras HTML/JSON pueden cambiar sin previo aviso. Cuando un proveedor altera su contrato, el scraper afectado reporta `failed` o `partial` y preserva el último snapshot válido hasta ajustar el adaptador correspondiente.
+- **Carácter informativo**: La disponibilidad de butacas, precios finales y eventuales reprogramaciones de último momento dependen exclusivamente de cada cadena exhibidora.
+- **Atribución TMDB**: *This product uses the TMDB API but is not endorsed or certified by TMDB.* Los pósters, sinopsis y calificaciones provienen de [The Movie Database (TMDB)](https://www.themoviedb.org/).
