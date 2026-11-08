@@ -26,13 +26,4 @@ export interface ICinemaScraper {
   scrape(): Promise<ScrapedChainResult>;
 }
 
-/**
- * Helper to build a Date in Argentina Timezone (UTC-3) from YYYY-MM-DD and HH:mm
- */
-export function buildArgentinaDate(dateStr: string, timeStr: string): Date {
-  const cleanDate = dateStr.trim().slice(0, 10);
-  const [rawHours = '00', rawMinutes = '00'] = timeStr.trim().split(':');
-  const hh = rawHours.padStart(2, '0');
-  const mm = rawMinutes.padStart(2, '0');
-  return new Date(`${cleanDate}T${hh}:${mm}:00.000-03:00`);
-}
+export { buildArgentinaDate } from '../../common/utils/argentina-time.util';

@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ScraperOrchestratorService } from '../scraper/services/scraper-orchestrator.service';
+import { ARGENTINA_TIMEZONE } from '../common/utils/argentina-time.util';
 
 @Injectable()
 export class CronService {
@@ -10,7 +11,7 @@ export class CronService {
     private readonly scraperOrchestrator: ScraperOrchestratorService,
   ) {}
 
-  @Cron('0 4 * * *')
+  @Cron('0 4 * * *', { timeZone: ARGENTINA_TIMEZONE })
   async handleDailyScraping() {
     if (process.env.DISABLE_INTERNAL_CRON === 'true') {
       this.logger.log(
@@ -19,7 +20,9 @@ export class CronService {
       return;
     }
 
-    this.logger.log('Iniciando actualización programada de cartelera...');
+    this.logger.log(
+      `Iniciando actualización programada de cartelera (${ARGENTINA_TIMEZONE})...`,
+    );
     await this.scraperOrchestrator.runAll();
   }
 }

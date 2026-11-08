@@ -11,6 +11,10 @@ import { ShowcaseService } from '../showcase/showcase.service';
 import { CinemaCenterService } from '../cinemacenter/cinemacenter.service';
 import { CinemarkService } from '../cinemark/cinemark.service';
 import { CinepolisService } from '../cinepolis/cinepolis.service';
+import {
+  getArgentinaStartOfToday,
+  getArgentinaStartOfYesterday,
+} from '../../common/utils/argentina-time.util';
 
 export interface OrchestratorChainSummary {
   chainName: string;
@@ -133,8 +137,7 @@ export class ScraperOrchestratorService {
     let locationsProcessed = 0;
     const uniqueMoviesInChain = new Set<number>();
 
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = getArgentinaStartOfToday();
 
     for (const locData of chainData.locations) {
       let locationId = locationIdByName.get(locData.locationName);
@@ -271,12 +274,11 @@ export class ScraperOrchestratorService {
   }
 
   async cleanupOldShowtimes(): Promise<number> {
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayCutoff = getArgentinaStartOfYesterday();
 
     const result = await this.prisma.showtime.deleteMany({
       where: {
-        dateTime: { lt: yesterday },
+        dateTime: { lt: yesterdayCutoff },
       },
     });
 

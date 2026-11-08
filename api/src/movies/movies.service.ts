@@ -9,6 +9,10 @@ import {
   UpcomingMovieItem,
 } from './movies.interface';
 import { TmdbService } from '../tmdb/tmdb.service';
+import {
+  getArgentinaDayRange,
+  getArgentinaTodayDateString,
+} from '../common/utils/argentina-time.util';
 
 interface CacheEntry<T> {
   data: T;
@@ -49,26 +53,12 @@ export class MoviesService {
     });
   }
 
-  private getArgentinaDayRange(dateStr?: string): { start: Date; end: Date } {
-    const cleanDate =
-      dateStr && /^\d{4}-\d{2}-\d{2}/.test(dateStr)
-        ? dateStr.slice(0, 10)
-        : new Intl.DateTimeFormat('en-CA', {
-            timeZone: 'America/Argentina/Buenos_Aires',
-          }).format(new Date());
-
-    const start = new Date(`${cleanDate}T00:00:00.000-03:00`);
-    const end = new Date(`${cleanDate}T23:59:59.999-03:00`);
-    return { start, end };
-  }
-
   async getNowPlaying(filters: MovieFilters): Promise<NowPlayingMovieItem[]> {
-    const cacheKey = `now-playing:${filters.date || 'today'}:${filters.city || ''}:${filters.zone || ''}:${filters.chainId || ''}:${filters.cinemaId || ''}`;
+    const { date, city, zone, chainId, cinemaId } = filters;
+    const { dateKey, start, end } = getArgentinaDayRange(date);
+    const cacheKey = `now-playing:${dateKey}:${city || ''}:${zone || ''}:${chainId || ''}:${cinemaId || ''}`;
     const cached = this.getFromCache<NowPlayingMovieItem[]>(cacheKey);
     if (cached) return cached;
-
-    const { date, city, zone, chainId, cinemaId } = filters;
-    const { start, end } = this.getArgentinaDayRange(date);
 
     const parsedChainId = chainId ? parseInt(chainId, 10) : undefined;
     const parsedCinemaId = cinemaId ? parseInt(cinemaId, 10) : undefined;
@@ -178,7 +168,7 @@ export class MoviesService {
     filters: MovieFilters,
   ): Promise<MovieDetailResponse | null> {
     const { date, city, zone, chainId, cinemaId } = filters;
-    const { start, end } = this.getArgentinaDayRange(date);
+    const { start, end } = getArgentinaDayRange(date);
 
     const movie = await this.prisma.movie.findUnique({
       where: { id },
@@ -268,9 +258,7 @@ export class MoviesService {
     if (cached) return cached;
 
     const rawMovies = await this.tmdbService.getUpcomingMovies();
-    const today = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Argentina/Buenos_Aires',
-    }).format(new Date());
+    const today = getArgentinaTodayDateString();
 
     const cleanedMovies = rawMovies.map((movie) => {
       const isReRelease = Boolean(
