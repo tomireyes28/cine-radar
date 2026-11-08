@@ -8,6 +8,7 @@ import { CinepolisService } from './cinepolis/cinepolis.service';
 import { CinemaCenterService } from './cinemacenter/cinemacenter.service';
 import { TitleNormalizerService } from './services/title-normalizer.service';
 import { MovieIdentityService } from './services/movie-identity.service';
+import { ScraperLockService } from './services/scraper-lock.service';
 import { ScraperOrchestratorService } from './services/scraper-orchestrator.service';
 import { TmdbModule } from '../tmdb/tmdb.module';
 
@@ -17,6 +18,7 @@ import { TmdbModule } from '../tmdb/tmdb.module';
   providers: [
     TitleNormalizerService,
     MovieIdentityService,
+    ScraperLockService,
     MultiplexService,
     CinemarkService,
     ShowcaseService,
@@ -25,6 +27,6 @@ import { TmdbModule } from '../tmdb/tmdb.module';
     CinemaCenterService,
     ScraperOrchestratorService,
   ],
-  exports: [ScraperOrchestratorService],
+  exports: [ScraperOrchestratorService, ScraperLockService],
 })
 export class ScraperModule {}

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ScraperOrchestratorService } from '../scraper/services/scraper-orchestrator.service';
 import { ARGENTINA_TIMEZONE } from '../common/utils/argentina-time.util';
@@ -23,6 +23,16 @@ export class CronService {
     this.logger.log(
       `Iniciando actualización programada de cartelera (${ARGENTINA_TIMEZONE})...`,
     );
-    await this.scraperOrchestrator.runAll();
+    try {
+      await this.scraperOrchestrator.runAll();
+    } catch (error: unknown) {
+      if (error instanceof ConflictException) {
+        this.logger.warn(
+          `Cron omitido: ${error.message}`,
+        );
+        return;
+      }
+      throw error;
+    }
   }
 }

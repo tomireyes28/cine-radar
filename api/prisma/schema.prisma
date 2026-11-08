@@ -67,3 +67,12 @@ model Showtime {
   @@index([movieId, dateTime])
   @@index([locationId, dateTime])
 }
+
+model ScraperLock {
+  lockKey    String   @id
+  ownerId    String
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime
+
+  @@index([expiresAt])
+}

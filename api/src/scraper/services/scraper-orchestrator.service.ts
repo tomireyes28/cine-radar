@@ -1,6 +1,19 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MovieIdentityService } from './movie-identity.service';
+import {
+  buildChainLockKey,
+  DEFAULT_CHAIN_LOCK_TTL_MS,
+  DEFAULT_GLOBAL_LOCK_TTL_MS,
+  GLOBAL_SCRAPER_LOCK_KEY,
+  ScraperLockService,
+} from './scraper-lock.service';
 import {
   deriveChainScrapeStatus,
   ICinemaScraper,
@@ -62,6 +75,7 @@ export class ScraperOrchestratorService {
     private readonly cinemaCenterService: CinemaCenterService,
     private readonly cinemarkService: CinemarkService,
     private readonly cinepolisService: CinepolisService,
+    @Optional() private readonly scraperLock?: ScraperLockService,
   ) {
     // Ordered from fastest HTTP scrapers to browser-based scrapers
     this.strategies = [
@@ -76,87 +90,142 @@ export class ScraperOrchestratorService {
 
   async runAll(): Promise<OrchestratorRunSummary> {
     const startTime = Date.now();
-    this.logger.log('Iniciando orquestación completa de cartelera...');
+    let globalOwner: string | null = null;
 
-    const deletedOld = await this.cleanupOldShowtimes();
-    const summaries: OrchestratorChainSummary[] = [];
-
-    // Shared movie DB ID cache across all chains during a run
-    const resolvedMovieDbIds = new Map<string, number | null>();
-
-    for (const strategy of this.strategies) {
-      const chainStart = Date.now();
-      try {
-        const summary = await this.executeStrategy(
-          strategy,
-          resolvedMovieDbIds,
+    if (this.scraperLock) {
+      globalOwner = await this.scraperLock.acquire(
+        GLOBAL_SCRAPER_LOCK_KEY,
+        DEFAULT_GLOBAL_LOCK_TTL_MS,
+      );
+      if (!globalOwner) {
+        throw new ConflictException(
+          'Ya existe una ejecución global de scraping en curso.',
         );
-        summaries.push(summary);
-      } catch (error: unknown) {
-        const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error(
-          `Fallo no controlado ejecutando estrategia ${strategy.chainName}: ${msg}`,
-        );
-        summaries.push({
-          chainKey: strategy.chainKey,
-          chainName: strategy.chainName,
-          status: 'failed',
-          expectedLocations: 0,
-          locationsComplete: 0,
-          locationsEmptyVerified: 0,
-          locationsPartial: 0,
-          locationsFailed: 0,
-          locationsProcessed: 0,
-          moviesResolved: 0,
-          showtimesInserted: 0,
-          discardedShowtimes: 0,
-          durationMs: Date.now() - chainStart,
-          errors: [msg],
-        });
       }
     }
 
-    const totalShowtimes = summaries.reduce(
-      (acc, s) => acc + s.showtimesInserted,
-      0,
-    );
-    const failedChains = summaries
-      .filter((s) => s.status === 'failed')
-      .map((s) => s.chainKey);
-    const partialChains = summaries
-      .filter((s) => s.status === 'partial')
-      .map((s) => s.chainKey);
+    try {
+      this.logger.log('Iniciando orquestación completa de cartelera...');
 
-    let overallStatus: 'ok' | 'degraded' | 'failed' = 'ok';
-    if (
-      summaries.length === 0 ||
-      failedChains.length === summaries.length ||
-      summaries.every(
-        (s) =>
-          s.locationsComplete +
-            s.locationsEmptyVerified +
-            s.locationsPartial ===
-          0,
-      )
-    ) {
-      overallStatus = 'failed';
-    } else if (failedChains.length > 0 || partialChains.length > 0) {
-      overallStatus = 'degraded';
+      const deletedOld = await this.cleanupOldShowtimes();
+      const summaries: OrchestratorChainSummary[] = [];
+
+      // Shared movie DB ID cache across all chains during a run
+      const resolvedMovieDbIds = new Map<string, number | null>();
+
+      for (const strategy of this.strategies) {
+        const chainStart = Date.now();
+        const chainLockKey = buildChainLockKey(strategy.chainKey);
+        let chainOwner: string | null = null;
+
+        if (this.scraperLock) {
+          chainOwner = await this.scraperLock.acquire(
+            chainLockKey,
+            DEFAULT_CHAIN_LOCK_TTL_MS,
+          );
+          if (!chainOwner) {
+            const lockMsg = `Ejecución omitida: bloqueo activo en ${chainLockKey}`;
+            this.logger.warn(`[${strategy.chainName}] ${lockMsg}`);
+            summaries.push({
+              chainKey: strategy.chainKey,
+              chainName: strategy.chainName,
+              status: 'failed',
+              expectedLocations: 0,
+              locationsComplete: 0,
+              locationsEmptyVerified: 0,
+              locationsPartial: 0,
+              locationsFailed: 0,
+              locationsProcessed: 0,
+              moviesResolved: 0,
+              showtimesInserted: 0,
+              discardedShowtimes: 0,
+              durationMs: Date.now() - chainStart,
+              errors: [lockMsg],
+            });
+            continue;
+          }
+        }
+
+        try {
+          const summary = await this.executeStrategy(
+            strategy,
+            resolvedMovieDbIds,
+          );
+          summaries.push(summary);
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Fallo no controlado ejecutando estrategia ${strategy.chainName}: ${msg}`,
+          );
+          summaries.push({
+            chainKey: strategy.chainKey,
+            chainName: strategy.chainName,
+            status: 'failed',
+            expectedLocations: 0,
+            locationsComplete: 0,
+            locationsEmptyVerified: 0,
+            locationsPartial: 0,
+            locationsFailed: 0,
+            locationsProcessed: 0,
+            moviesResolved: 0,
+            showtimesInserted: 0,
+            discardedShowtimes: 0,
+            durationMs: Date.now() - chainStart,
+            errors: [msg],
+          });
+        } finally {
+          if (this.scraperLock && chainOwner) {
+            await this.scraperLock.release(chainLockKey, chainOwner);
+          }
+        }
+      }
+
+      const totalShowtimes = summaries.reduce(
+        (acc, s) => acc + s.showtimesInserted,
+        0,
+      );
+      const failedChains = summaries
+        .filter((s) => s.status === 'failed')
+        .map((s) => s.chainKey);
+      const partialChains = summaries
+        .filter((s) => s.status === 'partial')
+        .map((s) => s.chainKey);
+
+      let overallStatus: 'ok' | 'degraded' | 'failed' = 'ok';
+      if (
+        summaries.length === 0 ||
+        failedChains.length === summaries.length ||
+        summaries.every(
+          (s) =>
+            s.locationsComplete +
+              s.locationsEmptyVerified +
+              s.locationsPartial ===
+            0,
+        )
+      ) {
+        overallStatus = 'failed';
+      } else if (failedChains.length > 0 || partialChains.length > 0) {
+        overallStatus = 'degraded';
+      }
+
+      this.logger.log(
+        `Orquestación finalizada (${overallStatus}) en ${((Date.now() - startTime) / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
+      );
+
+      return {
+        status: overallStatus,
+        completedAt: new Date().toISOString(),
+        deletedExpiredShowtimes: deletedOld,
+        totalShowtimesInserted: totalShowtimes,
+        failedChains,
+        partialChains,
+        chains: summaries,
+      };
+    } finally {
+      if (this.scraperLock && globalOwner) {
+        await this.scraperLock.release(GLOBAL_SCRAPER_LOCK_KEY, globalOwner);
+      }
     }
-
-    this.logger.log(
-      `Orquestación finalizada (${overallStatus}) en ${((Date.now() - startTime) / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
-    );
-
-    return {
-      status: overallStatus,
-      completedAt: new Date().toISOString(),
-      deletedExpiredShowtimes: deletedOld,
-      totalShowtimesInserted: totalShowtimes,
-      failedChains,
-      partialChains,
-      chains: summaries,
-    };
   }
 
   async runByChainKey(chainKey: string): Promise<OrchestratorChainSummary> {
@@ -168,6 +237,27 @@ export class ScraperOrchestratorService {
       throw new NotFoundException(
         `No existe estrategia de scraping para "${chainKey}"`,
       );
+    }
+
+    const chainLockKey = buildChainLockKey(strategy.chainKey);
+    let chainOwner: string | null = null;
+
+    if (this.scraperLock) {
+      if (await this.scraperLock.isLocked(GLOBAL_SCRAPER_LOCK_KEY)) {
+        throw new ConflictException(
+          `No se puede ejecutar "${strategy.chainKey}" mientras hay una orquestación global en curso.`,
+        );
+      }
+
+      chainOwner = await this.scraperLock.acquire(
+        chainLockKey,
+        DEFAULT_CHAIN_LOCK_TTL_MS,
+      );
+      if (!chainOwner) {
+        throw new ConflictException(
+          `Ya existe una ejecución activa de scraping para "${strategy.chainKey}".`,
+        );
+      }
     }
 
     const resolvedMovieDbIds = new Map<string, number | null>();
@@ -195,6 +285,10 @@ export class ScraperOrchestratorService {
         durationMs: Date.now() - chainStart,
         errors: [msg],
       };
+    } finally {
+      if (this.scraperLock && chainOwner) {
+        await this.scraperLock.release(chainLockKey, chainOwner);
+      }
     }
   }
 

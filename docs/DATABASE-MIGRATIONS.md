@@ -42,7 +42,7 @@ npx prisma migrate resolve --applied 20261108020300_sync_billboard_schema_and_in
 npx prisma migrate deploy
 ```
 
-*(Las dos primeras órdenes registran la línea base anterior a las evoluciones nuevas; `npx prisma migrate deploy` aplica las migraciones incrementales posteriores, como la separación de `Movie.normalizedKey` y `tmdbId` nullable).*
+*(Las dos primeras órdenes registran la línea base anterior a las evoluciones nuevas; `npx prisma migrate deploy` aplica las migraciones incrementales posteriores, como la separación de `Movie.normalizedKey` / `tmdbId` nullable y la tabla `ScraperLock` de bloqueos distribuidos).*
 
 ### Paso 2.3 — Confirmar estado final
 

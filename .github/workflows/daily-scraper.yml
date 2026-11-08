@@ -23,6 +23,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: daily-billboard-scraper
+  cancel-in-progress: false
+
 jobs:
   scrape-billboard:
     runs-on: ubuntu-latest
