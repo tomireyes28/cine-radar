@@ -39,15 +39,26 @@ export interface TmdbResolvedMovie {
   genres: string[];
 }
 
+export type TmdbLookupResult =
+  | { status: 'matched'; movie: TmdbResolvedMovie }
+  | { status: 'not_found' }
+  | { status: 'transient_error'; reason: string };
+
 @Injectable()
 export class TmdbService {
   private readonly logger = new Logger(TmdbService.name);
-  private readonly apiKey = process.env.TMDB_API_KEY;
   private readonly baseUrl = 'https://api.themoviedb.org/3';
 
   private readonly searchCache = new Map<string, TmdbResolvedMovie | null>();
   private readonly detailCache = new Map<number, TmdbMovieDetailApiResponse>();
-  private upcomingCache: { expiresAt: number; data: TmdbMovieSearchItem[] } | null = null;
+  private upcomingCache: {
+    expiresAt: number;
+    data: TmdbMovieSearchItem[];
+  } | null = null;
+
+  private get apiKey(): string | undefined {
+    return process.env.TMDB_API_KEY;
+  }
 
   private cleanTitle(rawTitle: string): string {
     let cleaned = rawTitle
@@ -62,13 +73,29 @@ export class TmdbService {
     return cleaned.replace(/\s+/g, ' ').trim();
   }
 
-  async searchMovie(rawTitle: string): Promise<TmdbResolvedMovie | null> {
+  /**
+   * Distinguishes between a confirmed match, a confirmed absence in TMDB (HTTP 200 empty),
+   * and transient infrastructure/configuration errors (never cached as negative results).
+   */
+  async lookupMovie(rawTitle: string): Promise<TmdbLookupResult> {
     const cleanedTitle = this.cleanTitle(rawTitle);
-    if (!cleanedTitle) return null;
+    if (!cleanedTitle) {
+      return { status: 'not_found' };
+    }
 
     const cacheKey = cleanedTitle.toLowerCase();
     if (this.searchCache.has(cacheKey)) {
-      return this.searchCache.get(cacheKey) ?? null;
+      const cached = this.searchCache.get(cacheKey) ?? null;
+      return cached
+        ? { status: 'matched', movie: cached }
+        : { status: 'not_found' };
+    }
+
+    if (!this.apiKey) {
+      this.logger.warn(
+        `TMDB_API_KEY ausente al consultar "${cleanedTitle}"; marcando como falla transitoria.`,
+      );
+      return { status: 'transient_error', reason: 'Missing TMDB_API_KEY' };
     }
 
     try {
@@ -86,11 +113,20 @@ export class TmdbService {
         },
       );
 
-      const results = response.data.results;
-      if (!results || results.length === 0) {
-        this.logger.warn(`No se encontró película en TMDB para: "${cleanedTitle}"`);
+      const results = response.data?.results;
+      if (!Array.isArray(results)) {
+        return {
+          status: 'transient_error',
+          reason: 'Invalid TMDB response structure',
+        };
+      }
+
+      if (results.length === 0) {
+        this.logger.warn(
+          `No se encontró película en TMDB para: "${cleanedTitle}"`,
+        );
         this.searchCache.set(cacheKey, null);
-        return null;
+        return { status: 'not_found' };
       }
 
       const topMatch = results[0];
@@ -99,12 +135,14 @@ export class TmdbService {
       const resolved: TmdbResolvedMovie = {
         tmdbId: topMatch.id,
         officialTitle: details?.title || topMatch.title,
-        posterUrl: (details?.poster_path || topMatch.poster_path)
-          ? `https://image.tmdb.org/t/p/w500${details?.poster_path || topMatch.poster_path}`
-          : null,
-        backdropUrl: (details?.backdrop_path || topMatch.backdrop_path)
-          ? `https://image.tmdb.org/t/p/w1280${details?.backdrop_path || topMatch.backdrop_path}`
-          : null,
+        posterUrl:
+          details?.poster_path || topMatch.poster_path
+            ? `https://image.tmdb.org/t/p/w500${details?.poster_path || topMatch.poster_path}`
+            : null,
+        backdropUrl:
+          details?.backdrop_path || topMatch.backdrop_path
+            ? `https://image.tmdb.org/t/p/w1280${details?.backdrop_path || topMatch.backdrop_path}`
+            : null,
         overview: details?.overview || topMatch.overview || null,
         releaseDate: details?.release_date || topMatch.release_date || null,
         duration: details?.runtime || null,
@@ -116,12 +154,19 @@ export class TmdbService {
       };
 
       this.searchCache.set(cacheKey, resolved);
-      return resolved;
+      return { status: 'matched', movie: resolved };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error consultando TMDB para "${cleanedTitle}": ${msg}`);
-      return null;
+      this.logger.error(
+        `Error consultando TMDB para "${cleanedTitle}": ${msg}`,
+      );
+      return { status: 'transient_error', reason: msg };
     }
+  }
+
+  async searchMovie(rawTitle: string): Promise<TmdbResolvedMovie | null> {
+    const result = await this.lookupMovie(rawTitle);
+    return result.status === 'matched' ? result.movie : null;
   }
 
   private async fetchMovieDetails(
@@ -153,6 +198,10 @@ export class TmdbService {
     const now = Date.now();
     if (this.upcomingCache && this.upcomingCache.expiresAt > now) {
       return this.upcomingCache.data;
+    }
+
+    if (!this.apiKey) {
+      return [];
     }
 
     try {

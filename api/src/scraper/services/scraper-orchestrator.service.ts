@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { TmdbService } from '../../tmdb/tmdb.service';
+import { MovieIdentityService } from './movie-identity.service';
 import {
   ICinemaScraper,
   ScrapedChainResult,
@@ -31,7 +31,7 @@ export class ScraperOrchestratorService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly tmdbService: TmdbService,
+    private readonly movieIdentity: MovieIdentityService,
     private readonly atlasService: AtlasService,
     private readonly multiplexService: MultiplexService,
     private readonly showcaseService: ShowcaseService,
@@ -165,7 +165,7 @@ export class ScraperOrchestratorService {
       }[] = [];
 
       for (const movieItem of locData.movies) {
-        const dbMovieId = await this.resolveAndUpsertMovie(
+        const dbMovieId = await this.movieIdentity.resolveAndUpsertMovie(
           movieItem.rawTitle,
           resolvedMovieDbIds,
         );
@@ -216,61 +216,6 @@ export class ScraperOrchestratorService {
       showtimesInserted: totalShowtimesInserted,
       durationMs,
     };
-  }
-
-  private async resolveAndUpsertMovie(
-    rawTitle: string,
-    cache: Map<string, number | null>,
-  ): Promise<number | null> {
-    const key = rawTitle.trim().toLowerCase();
-    if (cache.has(key)) {
-      return cache.get(key) ?? null;
-    }
-
-    const tmdbInfo = await this.tmdbService.searchMovie(rawTitle);
-
-    // Fallback: If not indexed on TMDB (indie, festival, or local film), use a deterministic synthetic ID
-    const syntheticId = -Math.abs(
-      key.split('').reduce((acc, char) => (acc * 31 + char.charCodeAt(0)) | 0, 0) || 1,
-    );
-
-    const resolvedTmdbId = tmdbInfo?.tmdbId ?? syntheticId;
-    const resolvedTitle = tmdbInfo?.officialTitle ?? rawTitle;
-    const resolvedPoster = tmdbInfo?.posterUrl ?? null;
-    const resolvedBackdrop = tmdbInfo?.backdropUrl ?? null;
-    const resolvedOverview = tmdbInfo?.overview ?? '';
-    const resolvedReleaseDate = tmdbInfo?.releaseDate ?? null;
-    const resolvedDuration = tmdbInfo?.duration ?? null;
-    const resolvedRating = tmdbInfo?.rating ?? null;
-    const resolvedGenres = tmdbInfo?.genres ?? [];
-
-    const dbMovie = await this.prisma.movie.upsert({
-      where: { tmdbId: resolvedTmdbId },
-      update: {
-        title: resolvedTitle,
-        posterUrl: resolvedPoster,
-        backdropUrl: resolvedBackdrop,
-        overview: resolvedOverview,
-        releaseDate: resolvedReleaseDate,
-        duration: resolvedDuration,
-        rating: resolvedRating,
-        genres: resolvedGenres,
-      },
-      create: {
-        tmdbId: resolvedTmdbId,
-        title: resolvedTitle,
-        posterUrl: resolvedPoster,
-        backdropUrl: resolvedBackdrop,
-        overview: resolvedOverview,
-        releaseDate: resolvedReleaseDate,
-        duration: resolvedDuration,
-        rating: resolvedRating,
-        genres: resolvedGenres,
-      },
-    });
-
-    cache.set(key, dbMovie.id);
-    return dbMovie.id;
   }
 
   async cleanupOldShowtimes(): Promise<number> {

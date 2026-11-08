@@ -39,7 +39,10 @@ Si la base ya refleja el estado actual del esquema pero no registra las migracio
 cd api
 npx prisma migrate resolve --applied 20260222170935_init_cinema_schema
 npx prisma migrate resolve --applied 20261108020300_sync_billboard_schema_and_indexes
+npx prisma migrate deploy
 ```
+
+*(Las dos primeras órdenes registran la línea base anterior a las evoluciones nuevas; `npx prisma migrate deploy` aplica las migraciones incrementales posteriores, como la separación de `Movie.normalizedKey` y `tmdbId` nullable).*
 
 ### Paso 2.3 — Confirmar estado final
 

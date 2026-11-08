@@ -8,19 +8,21 @@ datasource db {
 }
 
 model Movie {
-  id          Int        @id @default(autoincrement())
-  tmdbId      Int        @unique
-  title       String
-  posterUrl   String?
-  backdropUrl String?
-  overview    String?
-  releaseDate String?
-  duration    Int?
-  rating      String?
-  genres      String[]   @default([])
-  showtimes   Showtime[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id            Int        @id @default(autoincrement())
+  tmdbId        Int?       @unique
+  normalizedKey String     @unique
+  tmdbStatus    String     @default("pending")
+  title         String
+  posterUrl     String?
+  backdropUrl   String?
+  overview      String?
+  releaseDate   String?
+  duration      Int?
+  rating        String?
+  genres        String[]   @default([])
+  showtimes     Showtime[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 }
 
 model CinemaChain {

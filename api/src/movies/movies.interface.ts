@@ -8,7 +8,10 @@ export interface MovieFilters {
   cinemaId?: string;
 }
 
-export type NowPlayingMovieItem = Movie & {
+export type NowPlayingMovieItem = Omit<
+  Movie,
+  'normalizedKey' | 'tmdbStatus'
+> & {
   cinemaCount: number;
   chainNames: string[];
   zones: string[];

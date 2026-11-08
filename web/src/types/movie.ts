@@ -9,7 +9,7 @@ export interface Showtime {
 export interface Movie {
   id: number;
   title: string;
-  tmdbId: number;
+  tmdbId: number | null;
   posterUrl: string | null;
   backdropUrl?: string | null;
   overview?: string | null;
