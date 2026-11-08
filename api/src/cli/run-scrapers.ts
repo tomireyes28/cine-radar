@@ -1,9 +1,13 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../app.module';
 import { ScraperOrchestratorService } from '../scraper/services/scraper-orchestrator.service';
-import { parseCliChainArg } from './cli-args.util';
+import {
+  parseCliChainArg,
+  resolveFullRunExitCode,
+  resolveSingleChainExitCode,
+} from './cli-args.util';
 
-async function bootstrap() {
+async function bootstrap(): Promise<0 | 1> {
   const targetChain = parseCliChainArg(
     process.argv.slice(2),
     process.env.CHAIN_KEY,
@@ -19,17 +23,19 @@ async function bootstrap() {
     if (targetChain) {
       const summary = await orchestrator.runByChainKey(targetChain);
       console.log('📊 Resumen de cadena:', JSON.stringify(summary, null, 2));
-    } else {
-      const summary = await orchestrator.runAll();
-      console.log('📊 Resumen general:', JSON.stringify(summary, null, 2));
+      return resolveSingleChainExitCode(summary);
     }
+
+    const summary = await orchestrator.runAll();
+    console.log('📊 Resumen general:', JSON.stringify(summary, null, 2));
+    return resolveFullRunExitCode(summary);
   } finally {
     await appContext.close();
   }
 }
 
 bootstrap()
-  .then(() => process.exit(0))
+  .then((exitCode) => process.exit(exitCode))
   .catch((err: unknown) => {
     console.error('❌ Error fatal en CLI de scraping:', err);
     process.exit(1);

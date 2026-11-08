@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CINEPOLIS_LOCATIONS } from './cinepolis.locations';
 import {
   buildArgentinaDate,
+  deriveChainScrapeStatus,
   ICinemaScraper,
   ScrapedChainResult,
   ScrapedLocationResult,
@@ -66,6 +67,11 @@ export class CinepolisService implements ICinemaScraper {
       'Iniciando recolección en Cinépolis (GraphQL v2 via Single Browser Context)...',
     );
     const locationsMap = new Map<string, Map<string, ScrapedMovieItem>>();
+    for (const loc of CINEPOLIS_LOCATIONS) {
+      locationsMap.set(loc.name, new Map<string, ScrapedMovieItem>());
+    }
+    const chainErrors: string[] = [];
+    let topLevelFailure = false;
 
     let browser: import('puppeteer').Browser | null = null;
 
@@ -231,25 +237,45 @@ export class CinepolisService implements ICinemaScraper {
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(`Cinépolis scraper falló: ${msg}`);
+      chainErrors.push(msg);
+      topLevelFailure = true;
     } finally {
       if (browser) {
         await browser.close().catch(() => undefined);
       }
     }
 
-    const locations: ScrapedLocationResult[] = [];
-    for (const [locationName, moviesMap] of locationsMap.entries()) {
-      if (moviesMap.size > 0) {
-        locations.push({
-          locationName,
-          movies: Array.from(moviesMap.values()),
-        });
-      }
-    }
+    const locations: ScrapedLocationResult[] = CINEPOLIS_LOCATIONS.map(
+      (loc) => {
+        if (topLevelFailure) {
+          return {
+            locationName: loc.name,
+            status: 'failed',
+            movies: [],
+            errors: [...chainErrors],
+          };
+        }
+
+        const movies = Array.from(locationsMap.get(loc.name)!.values());
+        return {
+          locationName: loc.name,
+          status: movies.length > 0 ? 'complete' : 'empty_verified',
+          movies,
+        };
+      },
+    );
 
     return {
+      chainKey: this.chainKey,
       chainName: this.chainName,
+      status: deriveChainScrapeStatus(
+        locations,
+        CINEPOLIS_LOCATIONS.length,
+        chainErrors,
+      ),
+      expectedLocations: CINEPOLIS_LOCATIONS.length,
       locations,
+      errors: chainErrors,
     };
   }
 }

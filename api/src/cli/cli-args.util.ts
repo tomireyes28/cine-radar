@@ -1,3 +1,8 @@
+import type {
+  OrchestratorChainSummary,
+  OrchestratorRunSummary,
+} from '../scraper/services/scraper-orchestrator.service';
+
 export const ALLOWED_CHAIN_KEYS = [
   'atlas',
   'multiplex',
@@ -40,4 +45,25 @@ export function parseCliChainArg(
   }
 
   return normalized as AllowedChainKey;
+}
+
+/**
+ * Determines CLI exit code for a single-chain scrape run (F03).
+ */
+export function resolveSingleChainExitCode(
+  summary: OrchestratorChainSummary,
+): 0 | 1 {
+  return summary.status === 'failed' ? 1 : 0;
+}
+
+/**
+ * Determines CLI exit code for a full multi-chain scrape run (F03).
+ * Fails with exit code 1 when the run failed overall or any chain completely failed,
+ * ensuring CI/GitHub Actions never stays silently green when a provider breaks.
+ */
+export function resolveFullRunExitCode(summary: OrchestratorRunSummary): 0 | 1 {
+  if (summary.status === 'failed' || summary.failedChains.length > 0) {
+    return 1;
+  }
+  return 0;
 }

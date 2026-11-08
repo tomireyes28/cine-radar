@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import { CINEMACENTER_CITIES } from './cinemacenter.locations';
 import {
   buildArgentinaDate,
+  deriveChainScrapeStatus,
   ICinemaScraper,
   ScrapedChainResult,
   ScrapedLocationResult,
@@ -30,6 +31,7 @@ export class CinemaCenterService implements ICinemaScraper {
       'Iniciando recolección en Cinema Center (HTTP + AJAX - 0 MB Chrome)...',
     );
     const locationsResult: ScrapedLocationResult[] = [];
+    const chainErrors: string[] = [];
 
     for (const city of CINEMACENTER_CITIES) {
       try {
@@ -47,6 +49,11 @@ export class CinemaCenterService implements ICinemaScraper {
         );
 
         const horariosHtml = new TextDecoder('iso-8859-1').decode(rawBuffer);
+        if (!horariosHtml.toLowerCase().includes('cinemacenter')) {
+          throw new Error(
+            'Estructura HTML desconocida en /horarios de Cinema Center',
+          );
+        }
 
         const $ = cheerio.load(horariosHtml);
         const movieLinks: MovieLinkData[] = [];
@@ -71,75 +78,132 @@ export class CinemaCenterService implements ICinemaScraper {
           }
         });
 
-        if (movieLinks.length === 0) continue;
+        if (movieLinks.length === 0) {
+          locationsResult.push({
+            locationName: city.name,
+            status: 'empty_verified',
+            movies: [],
+          });
+          continue;
+        }
 
         const moviesMap = new Map<string, ScrapedMovieItem>();
+        const ajaxErrors: string[] = [];
+        let validShowtimesCount = 0;
 
         for (const item of movieLinks) {
           const cleanTitle = this.normalizer.normalize(item.rawTitle);
           if (!cleanTitle) continue;
 
-          const body = new URLSearchParams({
-            showId: item.showId,
-            cityId: String(city.cityId),
-            cinemaId: item.cinemaId,
-          });
+          try {
+            const body = new URLSearchParams({
+              showId: item.showId,
+              cityId: String(city.cityId),
+              cinemaId: item.cinemaId,
+            });
 
-          const { data: ajaxHtml } = await axios.post<string>(
-            'https://www.cinemacenter.com.ar/modules/parts/ajax_horariosShow.php',
-            body.toString(),
-            {
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
+            const { data: ajaxHtml } = await axios.post<string>(
+              'https://www.cinemacenter.com.ar/modules/parts/ajax_horariosShow.php',
+              body.toString(),
+              {
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                timeout: 10000,
               },
-              timeout: 10000,
-            },
-          );
+            );
 
-          const $ajax = cheerio.load(ajaxHtml);
-          const format = this.normalizer.normalizeFormat(item.rawTitle);
-          const language = this.normalizer.normalizeLanguage(item.rawTitle);
+            const $ajax = cheerio.load(ajaxHtml);
+            const format = this.normalizer.normalizeFormat(item.rawTitle);
+            const language = this.normalizer.normalizeLanguage(item.rawTitle);
 
-          $ajax('li ul.hours li a').each((_, aEl) => {
-            const href = $ajax(aEl).attr('href') || '';
-            const matches = href.match(/'([^']+)'/g);
-            if (matches && matches[4]) {
-              const isoRaw = matches[4].replace(/'/g, '').trim(); // e.g. "2026-10-30T16:00"
-              const [datePart, timePart] = isoRaw.split('T');
-              if (!datePart || !timePart) return;
+            $ajax('li ul.hours li a').each((_, aEl) => {
+              const href = $ajax(aEl).attr('href') || '';
+              const matches = href.match(/'([^']+)'/g);
+              if (matches && matches[4]) {
+                const isoRaw = matches[4].replace(/'/g, '').trim();
+                const [datePart, timePart] = isoRaw.split('T');
+                if (!datePart || !timePart) return;
 
-              if (!moviesMap.has(cleanTitle)) {
-                moviesMap.set(cleanTitle, {
-                  rawTitle: cleanTitle,
-                  showtimes: [],
+                const dateTime = buildArgentinaDate(datePart, timePart);
+                if (isNaN(dateTime.getTime())) return;
+
+                if (!moviesMap.has(cleanTitle)) {
+                  moviesMap.set(cleanTitle, {
+                    rawTitle: cleanTitle,
+                    showtimes: [],
+                  });
+                }
+
+                moviesMap.get(cleanTitle)!.showtimes.push({
+                  dateTime,
+                  format,
+                  language,
+                  ticketUrl: 'https://www.cinemacenter.com.ar/horarios',
                 });
+                validShowtimesCount++;
               }
-
-              moviesMap.get(cleanTitle)!.showtimes.push({
-                dateTime: buildArgentinaDate(datePart, timePart),
-                format,
-                language,
-                ticketUrl: 'https://www.cinemacenter.com.ar/horarios',
-              });
-            }
-          });
+            });
+          } catch (ajaxErr: unknown) {
+            const msg =
+              ajaxErr instanceof Error ? ajaxErr.message : String(ajaxErr);
+            ajaxErrors.push(`${city.name} showId=${item.showId}: ${msg}`);
+          }
         }
 
-        if (moviesMap.size > 0) {
+        if (validShowtimesCount === 0) {
+          const err = `${city.name}: ${movieLinks.length} películas detectadas pero 0 horarios extraídos`;
+          chainErrors.push(err, ...ajaxErrors);
           locationsResult.push({
             locationName: city.name,
-            movies: Array.from(moviesMap.values()),
+            status: 'failed',
+            movies: [],
+            errors: [err, ...ajaxErrors],
           });
+          continue;
         }
+
+        if (ajaxErrors.length > 0) {
+          chainErrors.push(...ajaxErrors);
+          locationsResult.push({
+            locationName: city.name,
+            status: 'partial',
+            movies: Array.from(moviesMap.values()),
+            errors: ajaxErrors,
+          });
+          continue;
+        }
+
+        locationsResult.push({
+          locationName: city.name,
+          status: 'complete',
+          movies: Array.from(moviesMap.values()),
+        });
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Error en ${city.name}: ${msg}`);
+        const fullErr = `Error en ${city.name}: ${msg}`;
+        this.logger.error(fullErr);
+        chainErrors.push(fullErr);
+        locationsResult.push({
+          locationName: city.name,
+          status: 'failed',
+          movies: [],
+          errors: [msg],
+        });
       }
     }
 
     return {
+      chainKey: this.chainKey,
       chainName: this.chainName,
+      status: deriveChainScrapeStatus(
+        locationsResult,
+        CINEMACENTER_CITIES.length,
+        chainErrors,
+      ),
+      expectedLocations: CINEMACENTER_CITIES.length,
       locations: locationsResult,
+      errors: chainErrors,
     };
   }
 }

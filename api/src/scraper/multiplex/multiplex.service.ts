@@ -4,18 +4,20 @@ import * as cheerio from 'cheerio';
 import { MULTIPLEX_LOCATIONS } from './multiplex.locations';
 import {
   buildArgentinaDate,
+  deriveChainScrapeStatus,
   ICinemaScraper,
   ScrapedChainResult,
   ScrapedLocationResult,
   ScrapedMovieItem,
+  ScrapeStatus,
 } from '../interfaces/scraper.interface';
 import { TitleNormalizerService } from '../services/title-normalizer.service';
 
 interface RawMultiplexFunction {
-  complejo: string;
-  dia: string; // "MM.DD.YYYY"
-  hora: string; // "HH:mm"
-  formato: string;
+  complejo?: string;
+  dia?: string; // "MM.DD.YYYY"
+  hora?: string; // "HH:mm"
+  formato?: string;
   idioma?: string;
 }
 
@@ -38,6 +40,7 @@ export class MultiplexService implements ICinemaScraper {
     this.logger.log('Iniciando recolección en Multiplex (HTTP + Cheerio)...');
     const url = 'https://multiplex.com.ar/';
     const locationsMap = new Map<string, Map<string, ScrapedMovieItem>>();
+    const chainErrors: string[] = [];
 
     for (const loc of MULTIPLEX_LOCATIONS) {
       locationsMap.set(loc.name, new Map<string, ScrapedMovieItem>());
@@ -45,8 +48,21 @@ export class MultiplexService implements ICinemaScraper {
 
     try {
       const { data } = await axios.get<string>(url, { timeout: 15000 });
+      if (typeof data !== 'string' || !data.toLowerCase().includes('<html')) {
+        throw new Error('Respuesta HTML inválida en Multiplex');
+      }
+
       const $ = cheerio.load(data);
       const movieItems = $('.funcion-item').toArray();
+
+      if (movieItems.length === 0) {
+        throw new Error(
+          'No se encontraron nodos .funcion-item en Multiplex (posible cambio de estructura HTML)',
+        );
+      }
+
+      let corruptItems = 0;
+      let totalParsedShowtimes = 0;
 
       for (const element of movieItems) {
         const $el = $(element);
@@ -57,12 +73,21 @@ export class MultiplexService implements ICinemaScraper {
         const movieUrl = $el.find('.portada-link').attr('href') || url;
         const funcionesRaw = $el.attr('data-funciones');
 
-        if (!rawTitle || !funcionesRaw) continue;
+        if (!rawTitle || !funcionesRaw) {
+          corruptItems++;
+          continue;
+        }
 
         let allFunctions: RawMultiplexFunction[] = [];
         try {
-          allFunctions = JSON.parse(funcionesRaw) as RawMultiplexFunction[];
+          const parsed = JSON.parse(funcionesRaw) as unknown;
+          if (!Array.isArray(parsed)) {
+            corruptItems++;
+            continue;
+          }
+          allFunctions = parsed as RawMultiplexFunction[];
         } catch {
+          corruptItems++;
           continue;
         }
 
@@ -71,7 +96,11 @@ export class MultiplexService implements ICinemaScraper {
 
         for (const locConfig of MULTIPLEX_LOCATIONS) {
           const matchingShows = allFunctions.filter(
-            (f) => f.complejo === locConfig.complexId && f.dia && f.hora,
+            (f) =>
+              f &&
+              f.complejo === locConfig.complexId &&
+              typeof f.dia === 'string' &&
+              typeof f.hora === 'string',
           );
           if (matchingShows.length === 0) continue;
 
@@ -86,10 +115,12 @@ export class MultiplexService implements ICinemaScraper {
           const movieEntry = locMovies.get(cleanTitle)!;
 
           for (const f of matchingShows) {
-            const isoDatePart = this.parseMultiplexDate(f.dia);
+            const isoDatePart = this.parseMultiplexDate(f.dia!);
             if (!isoDatePart) continue;
 
-            const dateTime = buildArgentinaDate(isoDatePart, f.hora);
+            const dateTime = buildArgentinaDate(isoDatePart, f.hora!);
+            if (isNaN(dateTime.getTime())) continue;
+
             const combinedFormat = `${f.formato || ''} ${f.idioma || ''}`;
 
             movieEntry.showtimes.push({
@@ -98,27 +129,74 @@ export class MultiplexService implements ICinemaScraper {
               language: this.normalizer.normalizeLanguage(combinedFormat),
               ticketUrl: movieUrl,
             });
+            totalParsedShowtimes++;
           }
         }
       }
+
+      if (totalParsedShowtimes === 0) {
+        throw new Error(
+          `Se detectaron ${movieItems.length} ítems en Multiplex pero 0 horarios válidos (posible cambio de esquema data-funciones)`,
+        );
+      }
+
+      if (corruptItems > 0) {
+        chainErrors.push(
+          `Multiplex omitió ${corruptItems} bloque(s) de película con JSON/atributos inválidos`,
+        );
+      }
+
+      const locations: ScrapedLocationResult[] = MULTIPLEX_LOCATIONS.map(
+        (loc) => {
+          const movies = Array.from(locationsMap.get(loc.name)!.values());
+          let status: ScrapeStatus =
+            movies.length > 0 ? 'complete' : 'empty_verified';
+          if (corruptItems > 0) {
+            status = 'partial';
+          }
+          return {
+            locationName: loc.name,
+            status,
+            movies,
+            errors: corruptItems > 0 ? [...chainErrors] : undefined,
+          };
+        },
+      );
+
+      return {
+        chainKey: this.chainKey,
+        chainName: this.chainName,
+        status: deriveChainScrapeStatus(
+          locations,
+          MULTIPLEX_LOCATIONS.length,
+          chainErrors,
+        ),
+        expectedLocations: MULTIPLEX_LOCATIONS.length,
+        locations,
+        errors: chainErrors,
+      };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error en Multiplex: ${msg}`);
-    }
+      chainErrors.push(msg);
 
-    const locations: ScrapedLocationResult[] = [];
-    for (const [locationName, moviesMap] of locationsMap.entries()) {
-      if (moviesMap.size > 0) {
-        locations.push({
-          locationName,
-          movies: Array.from(moviesMap.values()),
-        });
-      }
-    }
+      const failedLocations: ScrapedLocationResult[] = MULTIPLEX_LOCATIONS.map(
+        (loc) => ({
+          locationName: loc.name,
+          status: 'failed',
+          movies: [],
+          errors: [msg],
+        }),
+      );
 
-    return {
-      chainName: this.chainName,
-      locations,
-    };
+      return {
+        chainKey: this.chainKey,
+        chainName: this.chainName,
+        status: 'failed',
+        expectedLocations: MULTIPLEX_LOCATIONS.length,
+        locations: failedLocations,
+        errors: chainErrors,
+      };
+    }
   }
 }

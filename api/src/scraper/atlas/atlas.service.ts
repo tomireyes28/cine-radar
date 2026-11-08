@@ -3,6 +3,7 @@ import axios from 'axios';
 import { ATLAS_LOCATIONS } from './atlas.locations';
 import {
   buildArgentinaDate,
+  deriveChainScrapeStatus,
   ICinemaScraper,
   ScrapedChainResult,
   ScrapedLocationResult,
@@ -11,17 +12,17 @@ import {
 import { TitleNormalizerService } from '../services/title-normalizer.service';
 
 interface AtlasMovieCache {
-  titulo: string;
-  tituloOriginal: string;
+  titulo?: string;
+  tituloOriginal?: string;
 }
 
 interface AtlasShowtimeItem {
-  codFuncion: number;
-  codComplejo: number;
-  horaComienzo: string; // "15:00"
-  fecha: string; // "2026-10-30T00:00:00"
-  cachePeliculas: AtlasMovieCache;
-  codTecnologia: number;
+  codFuncion?: number;
+  codComplejo?: number;
+  horaComienzo?: string; // "15:00"
+  fecha?: string; // "2026-10-30T00:00:00"
+  cachePeliculas?: AtlasMovieCache;
+  codTecnologia?: number;
 }
 
 @Injectable()
@@ -35,27 +36,61 @@ export class AtlasService implements ICinemaScraper {
   async scrape(): Promise<ScrapedChainResult> {
     this.logger.log('Iniciando recolección en Atlas Cines (HTTP JSON API)...');
     const locationsResult: ScrapedLocationResult[] = [];
+    const chainErrors: string[] = [];
 
     for (const location of ATLAS_LOCATIONS) {
       try {
         const url = `https://www.atlascines.com/Funciones/GetPeliculasPorComplejo?codComplejo=${location.complexId}`;
-        const { data } = await axios.get<AtlasShowtimeItem[]>(url, {
+        const { data } = await axios.get<unknown>(url, {
           timeout: 10000,
         });
 
-        if (!Array.isArray(data) || data.length === 0) {
-          this.logger.warn(`Sin funciones para ${location.name}`);
+        if (!Array.isArray(data)) {
+          const err = `${location.name}: esquema inválido (se esperaba arreglo JSON)`;
+          this.logger.error(err);
+          chainErrors.push(err);
+          locationsResult.push({
+            locationName: location.name,
+            status: 'failed',
+            movies: [],
+            errors: [err],
+          });
+          continue;
+        }
+
+        if (data.length === 0) {
+          this.logger.warn(`Sin funciones confirmadas para ${location.name}`);
+          locationsResult.push({
+            locationName: location.name,
+            status: 'empty_verified',
+            movies: [],
+          });
           continue;
         }
 
         const moviesMap = new Map<string, ScrapedMovieItem>();
+        let validShowtimesCount = 0;
 
-        for (const item of data) {
-          const rawTitle = item.cachePeliculas?.titulo?.trim();
-          if (!rawTitle || !item.fecha || !item.horaComienzo) continue;
+        for (const rawItem of data) {
+          const item = rawItem as AtlasShowtimeItem;
+          const rawTitle =
+            typeof item?.cachePeliculas?.titulo === 'string'
+              ? item.cachePeliculas.titulo.trim()
+              : '';
+          if (
+            !rawTitle ||
+            typeof item.fecha !== 'string' ||
+            typeof item.horaComienzo !== 'string'
+          ) {
+            continue;
+          }
 
           const normalizedKey = this.normalizer.normalize(rawTitle);
           if (!normalizedKey) continue;
+
+          const datePart = item.fecha.split('T')[0];
+          const dateTime = buildArgentinaDate(datePart, item.horaComienzo);
+          if (isNaN(dateTime.getTime())) continue;
 
           if (!moviesMap.has(normalizedKey)) {
             moviesMap.set(normalizedKey, {
@@ -63,9 +98,6 @@ export class AtlasService implements ICinemaScraper {
               showtimes: [],
             });
           }
-
-          const datePart = item.fecha.split('T')[0];
-          const dateTime = buildArgentinaDate(datePart, item.horaComienzo);
 
           const format = this.normalizer.normalizeFormat(rawTitle);
           const language = this.normalizer.normalizeLanguage(rawTitle);
@@ -76,21 +108,52 @@ export class AtlasService implements ICinemaScraper {
             language,
             ticketUrl: location.url,
           });
+          validShowtimesCount++;
+        }
+
+        if (validShowtimesCount === 0) {
+          const err = `${location.name}: payload con ${data.length} elementos pero 0 funciones válidas (posible cambio de esquema)`;
+          this.logger.error(err);
+          chainErrors.push(err);
+          locationsResult.push({
+            locationName: location.name,
+            status: 'failed',
+            movies: [],
+            errors: [err],
+          });
+          continue;
         }
 
         locationsResult.push({
           locationName: location.name,
+          status: 'complete',
           movies: Array.from(moviesMap.values()),
         });
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Error en ${location.name}: ${msg}`);
+        const fullErr = `Error en ${location.name}: ${msg}`;
+        this.logger.error(fullErr);
+        chainErrors.push(fullErr);
+        locationsResult.push({
+          locationName: location.name,
+          status: 'failed',
+          movies: [],
+          errors: [msg],
+        });
       }
     }
 
     return {
+      chainKey: this.chainKey,
       chainName: this.chainName,
+      status: deriveChainScrapeStatus(
+        locationsResult,
+        ATLAS_LOCATIONS.length,
+        chainErrors,
+      ),
+      expectedLocations: ATLAS_LOCATIONS.length,
       locations: locationsResult,
+      errors: chainErrors,
     };
   }
 }
