@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import { withHttpRetry } from '../../common/utils/http-retry.util';
 import { ATLAS_LOCATIONS } from './atlas.locations';
 import {
   buildArgentinaDate,
@@ -41,9 +42,11 @@ export class AtlasService implements ICinemaScraper {
     for (const location of ATLAS_LOCATIONS) {
       try {
         const url = `https://www.atlascines.com/Funciones/GetPeliculasPorComplejo?codComplejo=${location.complexId}`;
-        const { data } = await axios.get<unknown>(url, {
-          timeout: 10000,
-        });
+        const { data } = await withHttpRetry(() =>
+          axios.get<unknown>(url, {
+            timeout: 10000,
+          }),
+        );
 
         if (!Array.isArray(data)) {
           const err = `${location.name}: esquema inválido (se esperaba arreglo JSON)`;

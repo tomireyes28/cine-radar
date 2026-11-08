@@ -46,9 +46,28 @@ export interface OrchestratorChainSummary {
   locationsProcessed: number;
   moviesResolved: number;
   showtimesInserted: number;
+  showtimesUnchanged?: number;
   discardedShowtimes: number;
   durationMs: number;
   errors: string[];
+}
+
+interface PendingShowtimeRow {
+  movieId: number;
+  locationId: number;
+  dateTime: Date;
+  format: string;
+  language: string;
+  ticketUrl: string;
+}
+
+function buildShowtimeCompositeKey(row: {
+  movieId: number;
+  dateTime: Date;
+  format: string;
+  language: string;
+}): string {
+  return `${row.movieId}|${row.dateTime.getTime()}|${row.format}|${row.language}`;
 }
 
 export interface OrchestratorRunSummary {
@@ -371,6 +390,7 @@ export class ScraperOrchestratorService {
     );
 
     let totalShowtimesInserted = 0;
+    let totalShowtimesUnchanged = 0;
     let discardedShowtimes = 0;
     let locationsProcessed = 0;
     const uniqueMoviesInChain = new Set<number>();
@@ -495,16 +515,86 @@ export class ScraperOrchestratorService {
         if (locData.status === 'complete') {
           discardedShowtimes += venueDiscarded;
           if (showtimesBatch.length > 0) {
-            const maxDateMs = showtimesBatch.reduce(
+            const incomingByKey = new Map<string, PendingShowtimeRow>();
+            for (const row of showtimesBatch) {
+              incomingByKey.set(buildShowtimeCompositeKey(row), row);
+            }
+            const dedupedBatch = Array.from(incomingByKey.values());
+
+            const maxDateMs = dedupedBatch.reduce(
               (max, item) => Math.max(max, item.dateTime.getTime()),
-              showtimesBatch[0].dateTime.getTime(),
+              dedupedBatch[0].dateTime.getTime(),
             );
             const maxDateKey = getArgentinaTodayDateString(new Date(maxDateMs));
             const windowEnd =
               locData.coveredUntil ?? getArgentinaDayRange(maxDateKey).end;
 
-            const created = await this.prisma.$transaction(
+            const syncResult = await this.prisma.$transaction(
               async (tx) => {
+                const maybeFindMany = (tx.showtime as { findMany?: unknown })
+                  .findMany;
+
+                if (typeof maybeFindMany === 'function') {
+                  const existing = await tx.showtime.findMany({
+                    where: {
+                      locationId: resolvedLocationId,
+                      dateTime: {
+                        gte: windowStart,
+                        lte: windowEnd,
+                      },
+                    },
+                    select: {
+                      id: true,
+                      movieId: true,
+                      dateTime: true,
+                      format: true,
+                      language: true,
+                      ticketUrl: true,
+                    },
+                  });
+
+                  const obsoleteIds: number[] = [];
+                  const unchangedKeys = new Set<string>();
+
+                  for (const row of existing) {
+                    const key = buildShowtimeCompositeKey(row);
+                    const incoming = incomingByKey.get(key);
+                    if (
+                      !incoming ||
+                      incoming.ticketUrl !== row.ticketUrl ||
+                      unchangedKeys.has(key)
+                    ) {
+                      obsoleteIds.push(row.id);
+                    } else {
+                      unchangedKeys.add(key);
+                    }
+                  }
+
+                  const toInsert = dedupedBatch.filter(
+                    (row) => !unchangedKeys.has(buildShowtimeCompositeKey(row)),
+                  );
+
+                  if (obsoleteIds.length > 0) {
+                    await tx.showtime.deleteMany({
+                      where: { id: { in: obsoleteIds } },
+                    });
+                  }
+
+                  let insertedCount = 0;
+                  if (toInsert.length > 0) {
+                    const created = await tx.showtime.createMany({
+                      data: toInsert,
+                      skipDuplicates: true,
+                    });
+                    insertedCount = created.count;
+                  }
+
+                  return {
+                    insertedCount,
+                    unchangedCount: unchangedKeys.size,
+                  };
+                }
+
                 await tx.showtime.deleteMany({
                   where: {
                     locationId: resolvedLocationId,
@@ -515,15 +605,18 @@ export class ScraperOrchestratorService {
                   },
                 });
 
-                return tx.showtime.createMany({
-                  data: showtimesBatch,
+                const created = await tx.showtime.createMany({
+                  data: dedupedBatch,
                   skipDuplicates: true,
                 });
+
+                return { insertedCount: created.count, unchangedCount: 0 };
               },
               { maxWait: 5000, timeout: 15000 },
             );
 
-            totalShowtimesInserted += created.count;
+            totalShowtimesInserted += syncResult.insertedCount;
+            totalShowtimesUnchanged += syncResult.unchangedCount;
             for (const id of venueMovieIds) {
               uniqueMoviesInChain.add(id);
             }
@@ -592,6 +685,7 @@ export class ScraperOrchestratorService {
       locationsProcessed,
       moviesResolved: uniqueMoviesInChain.size,
       showtimesInserted: totalShowtimesInserted,
+      showtimesUnchanged: totalShowtimesUnchanged,
       discardedShowtimes,
       durationMs,
       errors: effectiveErrors,

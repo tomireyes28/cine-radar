@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import { withHttpRetry } from '../../common/utils/http-retry.util';
 import { SHOWCASE_LOCATIONS } from './showcase.locations';
 import {
   buildArgentinaDate,
@@ -60,9 +61,10 @@ export class ShowcaseService implements ICinemaScraper {
     const chainErrors: string[] = [];
 
     try {
-      const { data: homeHtml } = await axios.get<string>(
-        'https://entradas.todoshowcase.com/',
-        { timeout: 15000 },
+      const { data: homeHtml } = await withHttpRetry(() =>
+        axios.get<string>('https://entradas.todoshowcase.com/', {
+          timeout: 15000,
+        }),
       );
 
       if (typeof homeHtml !== 'string') {
@@ -89,9 +91,11 @@ export class ShowcaseService implements ICinemaScraper {
 
       for (const filmId of filmIds) {
         try {
-          const { data: tree } = await axios.get<VoyAlCineFilmTree>(
-            `https://api.voyalcine.net/films/${filmId}/tree/showcase`,
-            { timeout: 10000 },
+          const { data: tree } = await withHttpRetry(() =>
+            axios.get<VoyAlCineFilmTree>(
+              `https://api.voyalcine.net/films/${filmId}/tree/showcase`,
+              { timeout: 10000 },
+            ),
           );
 
           if (

@@ -1,57 +1,41 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { Injectable } from '@nestjs/common';
 import { CinemaChain } from '@prisma/client';
-import {
-  MovieFilters,
-  GroupedShowtimes,
-  MovieDetailResponse,
-  NowPlayingMovieItem,
-  UpcomingMovieItem,
-} from './movies.interface';
-import { TmdbService } from '../tmdb/tmdb.service';
 import {
   getArgentinaDayRange,
   getArgentinaTodayDateString,
   isValidPositiveInt4String,
 } from '../common/utils/argentina-time.util';
-
-interface CacheEntry<T> {
-  data: T;
-  expiresAt: number;
-}
+import { BoundedTtlCache } from '../common/utils/bounded-ttl-cache.util';
+import { PrismaService } from '../prisma/prisma.service';
+import { TmdbService } from '../tmdb/tmdb.service';
+import {
+  GroupedShowtimes,
+  MovieDetailResponse,
+  MovieFilters,
+  NowPlayingMovieItem,
+  UpcomingMovieItem,
+} from './movies.interface';
 
 @Injectable()
 export class MoviesService {
-  private readonly logger = new Logger(MoviesService.name);
-  private readonly cache = new Map<string, CacheEntry<unknown>>();
+  private readonly cache = new BoundedTtlCache<string, unknown>(500);
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly tmdbService: TmdbService,
   ) {}
 
+  invalidateCache(): void {
+    this.cache.clear();
+  }
+
   private getFromCache<T>(key: string): T | null {
     const entry = this.cache.get(key);
-    if (!entry) return null;
-    if (Date.now() > entry.expiresAt) {
-      this.cache.delete(key);
-      return null;
-    }
-    return entry.data as T;
+    return entry.hit ? (entry.value as T) : null;
   }
 
   private setInCache<T>(key: string, data: T, ttlSeconds: number): void {
-    // Limit cache size to 500 keys to prevent unbounded memory growth
-    if (this.cache.size > 500) {
-      const firstEntry = this.cache.keys().next();
-      if (!firstEntry.done) {
-        this.cache.delete(firstEntry.value);
-      }
-    }
-    this.cache.set(key, {
-      data,
-      expiresAt: Date.now() + ttlSeconds * 1000,
-    });
+    this.cache.set(key, data, ttlSeconds * 1000);
   }
 
   async getNowPlaying(filters: MovieFilters): Promise<NowPlayingMovieItem[]> {
@@ -87,7 +71,19 @@ export class MoviesService {
           },
         },
       },
-      include: {
+      select: {
+        id: true,
+        tmdbId: true,
+        title: true,
+        posterUrl: true,
+        backdropUrl: true,
+        overview: true,
+        releaseDate: true,
+        duration: true,
+        rating: true,
+        genres: true,
+        createdAt: true,
+        updatedAt: true,
         showtimes: {
           where: {
             dateTime: {
@@ -97,10 +93,15 @@ export class MoviesService {
             location: locationWhere,
           },
           orderBy: { dateTime: 'asc' },
-          include: {
+          select: {
+            id: true,
+            locationId: true,
+            dateTime: true,
+            format: true,
+            language: true,
+            ticketUrl: true,
             location: {
               select: {
-                id: true,
                 zone: true,
                 chain: {
                   select: { name: true },
@@ -112,6 +113,7 @@ export class MoviesService {
       },
     });
 
+    const now = new Date();
     const enriched: NowPlayingMovieItem[] = movies.map((movie) => {
       const locationIds = new Set<number>();
       const chainNames = new Set<string>();
@@ -125,7 +127,6 @@ export class MoviesService {
         if (st.format) formats.add(st.format);
       }
 
-      const now = new Date();
       const nextShowtime =
         movie.showtimes.find((st) => st.dateTime >= now) || movie.showtimes[0];
 
@@ -262,12 +263,12 @@ export class MoviesService {
   }
 
   async getUpcomingMovies(): Promise<UpcomingMovieItem[]> {
-    const cacheKey = 'movies:upcoming';
+    const today = getArgentinaTodayDateString();
+    const cacheKey = `movies:upcoming:${today}`;
     const cached = this.getFromCache<UpcomingMovieItem[]>(cacheKey);
     if (cached) return cached;
 
     const rawMovies = await this.tmdbService.getUpcomingMovies();
-    const today = getArgentinaTodayDateString();
 
     const cleanedMovies = rawMovies.map((movie) => {
       const isReRelease = Boolean(
@@ -295,7 +296,7 @@ export class MoviesService {
       return a.isReRelease ? 1 : -1;
     });
 
-    // Cache for 30 minutes (1800s)
+    // Cache for 30 minutes (1800s), partitioned by Argentina calendar day
     this.setInCache(cacheKey, result, 1800);
     return result;
   }

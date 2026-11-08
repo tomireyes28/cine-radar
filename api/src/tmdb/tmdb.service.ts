@@ -1,15 +1,22 @@
 import {
+  Inject,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import axios from 'axios';
+import { getArgentinaTodayDateString } from '../common/utils/argentina-time.util';
+import { BoundedTtlCache } from '../common/utils/bounded-ttl-cache.util';
+import {
+  HttpRetryOptions,
+  withHttpRetry,
+} from '../common/utils/http-retry.util';
 import {
   extractReleaseYearHint,
   normalizeCinemaTitle,
   toComparableTitleKey,
 } from '../common/utils/title-normalizer.util';
-import { getArgentinaTodayDateString } from '../common/utils/argentina-time.util';
 
 export interface TmdbMovieSearchItem {
   id: number;
@@ -55,6 +62,21 @@ export type TmdbLookupResult =
   | { status: 'matched'; movie: TmdbResolvedMovie }
   | { status: 'not_found' }
   | { status: 'transient_error'; reason: string };
+
+export const TMDB_SERVICE_OPTIONS = 'TMDB_SERVICE_OPTIONS';
+
+export interface TmdbServiceOptions {
+  maxCacheEntries?: number;
+  positiveTtlMs?: number;
+  negativeTtlMs?: number;
+  upcomingTtlMs?: number;
+  retryOptions?: HttpRetryOptions;
+}
+
+const DEFAULT_MAX_CACHE_ENTRIES = 1_000;
+const DEFAULT_POSITIVE_TTL_MS = 24 * 60 * 60 * 1_000; // 24 hours
+const DEFAULT_NEGATIVE_TTL_MS = 30 * 60 * 1_000; // 30 minutes for confirmed misses
+const DEFAULT_UPCOMING_TTL_MS = 60 * 60 * 1_000; // 1 hour
 
 /**
  * Ranks TMDB search candidates using exact normalized title matching, optional
@@ -105,7 +127,10 @@ export function selectBestTmdbCandidate(
         // Without an explicit year hint, favor active theatrical releases over old homonyms/silent-era films
         if (releaseYear >= currentYear - 1 && releaseYear <= currentYear + 1) {
           score += 45;
-        } else if (releaseYear >= currentYear - 3 && releaseYear < currentYear - 1) {
+        } else if (
+          releaseYear >= currentYear - 3 &&
+          releaseYear < currentYear - 1
+        ) {
           score += 20;
         }
       }
@@ -128,12 +153,39 @@ export class TmdbService {
   private readonly logger = new Logger(TmdbService.name);
   private readonly baseUrl = 'https://api.themoviedb.org/3';
 
-  private readonly searchCache = new Map<string, TmdbResolvedMovie | null>();
-  private readonly detailCache = new Map<number, TmdbMovieDetailApiResponse>();
-  private upcomingCache: {
-    expiresAt: number;
-    data: TmdbMovieSearchItem[];
-  } | null = null;
+  private readonly searchCache: BoundedTtlCache<string, TmdbResolvedMovie | null>;
+  private readonly detailCache: BoundedTtlCache<
+    number,
+    TmdbMovieDetailApiResponse
+  >;
+  private readonly upcomingCache = new BoundedTtlCache<
+    string,
+    TmdbMovieSearchItem[]
+  >(4);
+
+  private readonly inFlightLookups = new Map<string, Promise<TmdbLookupResult>>();
+  private readonly inFlightDetails = new Map<
+    number,
+    Promise<TmdbMovieDetailApiResponse | null>
+  >();
+  private inFlightUpcoming: Promise<TmdbMovieSearchItem[]> | null = null;
+
+  private readonly positiveTtlMs: number;
+  private readonly negativeTtlMs: number;
+  private readonly upcomingTtlMs: number;
+  private readonly retryOptions: HttpRetryOptions;
+
+  constructor(
+    @Optional() @Inject(TMDB_SERVICE_OPTIONS) options?: TmdbServiceOptions,
+  ) {
+    const maxEntries = options?.maxCacheEntries ?? DEFAULT_MAX_CACHE_ENTRIES;
+    this.searchCache = new BoundedTtlCache(maxEntries);
+    this.detailCache = new BoundedTtlCache(maxEntries);
+    this.positiveTtlMs = options?.positiveTtlMs ?? DEFAULT_POSITIVE_TTL_MS;
+    this.negativeTtlMs = options?.negativeTtlMs ?? DEFAULT_NEGATIVE_TTL_MS;
+    this.upcomingTtlMs = options?.upcomingTtlMs ?? DEFAULT_UPCOMING_TTL_MS;
+    this.retryOptions = options?.retryOptions ?? {};
+  }
 
   private get apiKey(): string | undefined {
     return process.env.TMDB_API_KEY;
@@ -142,6 +194,7 @@ export class TmdbService {
   /**
    * Distinguishes between a confirmed match, a confirmed absence in TMDB (HTTP 200 empty),
    * and transient infrastructure/configuration errors (never cached as negative results).
+   * Deduplicates concurrent lookups for the same normalized key.
    */
   async lookupMovie(rawTitle: string): Promise<TmdbLookupResult> {
     const yearHint = extractReleaseYearHint(rawTitle);
@@ -153,13 +206,33 @@ export class TmdbService {
     const cacheKey = yearHint
       ? `${cleanedTitle.toLowerCase()}#${yearHint}`
       : cleanedTitle.toLowerCase();
-    if (this.searchCache.has(cacheKey)) {
-      const cached = this.searchCache.get(cacheKey) ?? null;
-      return cached
-        ? { status: 'matched', movie: cached }
+
+    const cachedEntry = this.searchCache.get(cacheKey);
+    if (cachedEntry.hit) {
+      return cachedEntry.value
+        ? { status: 'matched', movie: cachedEntry.value }
         : { status: 'not_found' };
     }
 
+    const pending = this.inFlightLookups.get(cacheKey);
+    if (pending) {
+      return pending;
+    }
+
+    const promise = this.executeLookup(cleanedTitle, yearHint, cacheKey).finally(
+      () => {
+        this.inFlightLookups.delete(cacheKey);
+      },
+    );
+    this.inFlightLookups.set(cacheKey, promise);
+    return promise;
+  }
+
+  private async executeLookup(
+    cleanedTitle: string,
+    yearHint: number | undefined,
+    cacheKey: string,
+  ): Promise<TmdbLookupResult> {
     if (!this.apiKey) {
       this.logger.warn(
         `TMDB_API_KEY ausente al consultar "${cleanedTitle}"; marcando como falla transitoria.`,
@@ -168,18 +241,19 @@ export class TmdbService {
     }
 
     try {
-      const response = await axios.get<TmdbSearchResponse>(
-        `${this.baseUrl}/search/movie`,
-        {
-          params: {
-            api_key: this.apiKey,
-            query: cleanedTitle,
-            language: 'es-MX',
-            region: 'AR',
-            include_adult: false,
-          },
-          timeout: 8000,
-        },
+      const response = await withHttpRetry(
+        () =>
+          axios.get<TmdbSearchResponse>(`${this.baseUrl}/search/movie`, {
+            params: {
+              api_key: this.apiKey,
+              query: cleanedTitle,
+              language: 'es-MX',
+              region: 'AR',
+              include_adult: false,
+            },
+            timeout: 8000,
+          }),
+        this.retryOptions,
       );
 
       const results = response.data?.results;
@@ -194,7 +268,7 @@ export class TmdbService {
         this.logger.warn(
           `No se encontró película en TMDB para: "${cleanedTitle}"`,
         );
-        this.searchCache.set(cacheKey, null);
+        this.searchCache.set(cacheKey, null, this.negativeTtlMs);
         return { status: 'not_found' };
       }
 
@@ -226,7 +300,7 @@ export class TmdbService {
         genres: details?.genres?.map((g) => g.name) ?? [],
       };
 
-      this.searchCache.set(cacheKey, resolved);
+      this.searchCache.set(cacheKey, resolved, this.positiveTtlMs);
       return { status: 'matched', movie: resolved };
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -245,76 +319,104 @@ export class TmdbService {
   private async fetchMovieDetails(
     tmdbId: number,
   ): Promise<TmdbMovieDetailApiResponse | null> {
-    if (this.detailCache.has(tmdbId)) {
-      return this.detailCache.get(tmdbId) ?? null;
+    const cached = this.detailCache.get(tmdbId);
+    if (cached.hit) {
+      return cached.value;
     }
 
-    try {
-      const response = await axios.get<TmdbMovieDetailApiResponse>(
-        `${this.baseUrl}/movie/${tmdbId}`,
-        {
-          params: {
-            api_key: this.apiKey,
-            language: 'es-MX',
-          },
-          timeout: 8000,
-        },
-      );
-      this.detailCache.set(tmdbId, response.data);
-      return response.data;
-    } catch {
-      return null;
+    const pending = this.inFlightDetails.get(tmdbId);
+    if (pending) {
+      return pending;
     }
+
+    const promise = (async (): Promise<TmdbMovieDetailApiResponse | null> => {
+      try {
+        const response = await withHttpRetry(
+          () =>
+            axios.get<TmdbMovieDetailApiResponse>(
+              `${this.baseUrl}/movie/${tmdbId}`,
+              {
+                params: {
+                  api_key: this.apiKey,
+                  language: 'es-MX',
+                },
+                timeout: 8000,
+              },
+            ),
+          this.retryOptions,
+        );
+        this.detailCache.set(tmdbId, response.data, this.positiveTtlMs);
+        return response.data;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      this.inFlightDetails.delete(tmdbId);
+    });
+
+    this.inFlightDetails.set(tmdbId, promise);
+    return promise;
   }
 
   async getUpcomingMovies(): Promise<TmdbMovieSearchItem[]> {
-    const now = Date.now();
-    if (this.upcomingCache && this.upcomingCache.expiresAt > now) {
-      return this.upcomingCache.data;
+    const todayAr = getArgentinaTodayDateString();
+    const cacheKey = `upcoming:${todayAr}`;
+    const cached = this.upcomingCache.get(cacheKey);
+    if (cached.hit) {
+      return cached.value;
     }
 
-    if (!this.apiKey) {
-      this.logger.error(
-        'TMDB_API_KEY no configurada al consultar próximos estrenos.',
-      );
-      throw new ServiceUnavailableException(
-        'El servicio externo de próximos estrenos no está configurado.',
-      );
+    if (this.inFlightUpcoming) {
+      return this.inFlightUpcoming;
     }
 
-    try {
-      const response = await axios.get<TmdbSearchResponse>(
-        `${this.baseUrl}/movie/upcoming`,
-        {
-          params: {
-            api_key: this.apiKey,
-            language: 'es-MX',
-            region: 'AR',
-            page: 1,
-          },
-          timeout: 8000,
-        },
-      );
-
-      if (!Array.isArray(response.data?.results)) {
-        throw new Error('Invalid TMDB upcoming response structure');
+    const promise = (async (): Promise<TmdbMovieSearchItem[]> => {
+      if (!this.apiKey) {
+        this.logger.error(
+          'TMDB_API_KEY no configurada al consultar próximos estrenos.',
+        );
+        throw new ServiceUnavailableException(
+          'El servicio externo de próximos estrenos no está configurado.',
+        );
       }
 
-      const results = response.data.results;
-      this.upcomingCache = {
-        expiresAt: now + 60 * 60 * 1000, // 1 hour cache
-        data: results,
-      };
-      return results;
-    } catch (error: unknown) {
-      if (error instanceof ServiceUnavailableException) {
-        throw error;
+      try {
+        const response = await withHttpRetry(
+          () =>
+            axios.get<TmdbSearchResponse>(`${this.baseUrl}/movie/upcoming`, {
+              params: {
+                api_key: this.apiKey,
+                language: 'es-MX',
+                region: 'AR',
+                page: 1,
+              },
+              timeout: 8000,
+            }),
+          this.retryOptions,
+        );
+
+        if (!Array.isArray(response.data?.results)) {
+          throw new Error('Invalid TMDB upcoming response structure');
+        }
+
+        const results = response.data.results;
+        this.upcomingCache.set(cacheKey, results, this.upcomingTtlMs);
+        return results;
+      } catch (error: unknown) {
+        if (error instanceof ServiceUnavailableException) {
+          throw error;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        this.logger.error(`Error consultando próximos estrenos: ${msg}`);
+        throw new ServiceUnavailableException(
+          'No se pudieron obtener los próximos estrenos temporalmente.',
+        );
       }
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error consultando próximos estrenos: ${msg}`);
-      throw new ServiceUnavailableException(
-        'No se pudieron obtener los próximos estrenos temporalmente.',
-      );
-    }
+    })().finally(() => {
+      this.inFlightUpcoming = null;
+    });
+
+    this.inFlightUpcoming = promise;
+    return promise;
   }
 }

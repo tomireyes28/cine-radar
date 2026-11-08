@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
+import { withHttpRetry } from '../../common/utils/http-retry.util';
 import { CINEMARK_LOCATIONS } from './cinemark.locations';
 import {
   buildArgentinaDate,
@@ -46,12 +47,14 @@ export class CinemarkService implements ICinemaScraper {
     const chainErrors: string[] = [];
 
     try {
-      const { data: theatersResponse } = await axios.get<{
-        data?: CinemarkBffTheater[];
-      }>(`${this.bffBaseUrl}/cinema/theaters`, {
-        headers: { country: 'AR' },
-        timeout: 12000,
-      });
+      const { data: theatersResponse } = await withHttpRetry(() =>
+        axios.get<{
+          data?: CinemarkBffTheater[];
+        }>(`${this.bffBaseUrl}/cinema/theaters`, {
+          headers: { country: 'AR' },
+          timeout: 12000,
+        }),
+      );
 
       if (!Array.isArray(theatersResponse?.data)) {
         throw new Error(
@@ -94,13 +97,15 @@ export class CinemarkService implements ICinemaScraper {
         }
 
         try {
-          const { data: showtimesResponse } = await axios.get<{
-            data?: CinemarkBffShowtime[];
-          }>(`${this.bffBaseUrl}/cinema/showtimes`, {
-            params: { theater: theaterId },
-            headers: { country: 'AR' },
-            timeout: 12000,
-          });
+          const { data: showtimesResponse } = await withHttpRetry(() =>
+            axios.get<{
+              data?: CinemarkBffShowtime[];
+            }>(`${this.bffBaseUrl}/cinema/showtimes`, {
+              params: { theater: theaterId },
+              headers: { country: 'AR' },
+              timeout: 12000,
+            }),
+          );
 
           if (!Array.isArray(showtimesResponse?.data)) {
             const err = `${locConfig.name}: esquema inválido en /cinema/showtimes`;

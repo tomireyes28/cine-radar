@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { withHttpRetry } from '../../common/utils/http-retry.util';
 import { MULTIPLEX_LOCATIONS } from './multiplex.locations';
 import {
   buildArgentinaDate,
@@ -47,7 +48,9 @@ export class MultiplexService implements ICinemaScraper {
     }
 
     try {
-      const { data } = await axios.get<string>(url, { timeout: 15000 });
+      const { data } = await withHttpRetry(() =>
+        axios.get<string>(url, { timeout: 15000 }),
+      );
       if (typeof data !== 'string' || !data.toLowerCase().includes('<html')) {
         throw new Error('Respuesta HTML inválida en Multiplex');
       }
