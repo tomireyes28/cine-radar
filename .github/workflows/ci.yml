@@ -1,0 +1,115 @@
+name: CI Validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: Backend (Migrations, Lint, Build & Tests)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: cine_radar_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d cine_radar_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    defaults:
+      run:
+        working-directory: ./api
+
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
+      DATABASE_URL: postgresql://postgres:ci_password@localhost:5432/cine_radar_ci
+      ADMIN_API_KEY: ci-admin-api-key-placeholder
+      TMDB_API_KEY: ci-tmdb-api-key-placeholder
+      FRONTEND_URL: https://cinema-agenda-app.vercel.app
+      DISABLE_INTERNAL_CRON: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: './api/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema & deploy migrations
+        run: |
+          npx prisma validate
+          npx prisma migrate deploy
+          npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+
+      - name: Seed declarative cinema catalog
+        run: npm run db:seed
+
+      - name: Lint (no autofix, zero warnings)
+        run: npm run lint:check
+
+      - name: Build API
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+  web:
+    name: Frontend (Lint, Typecheck & Build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./web
+
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: './web/package-lock.json'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: TypeScript check
+        run: |
+          npx next typegen
+          npx tsc --noEmit
+
+      - name: Build Next.js application
+        run: npm run build

@@ -39,3 +39,12 @@ export interface GroupedShowtimes {
 export type MovieDetailResponse = Movie & {
   cinemas: GroupedCinema[];
 };
+
+export interface UpcomingMovieItem {
+  id: number;
+  title: string;
+  posterUrl: string | null;
+  releaseDate: string;
+  overview: string;
+  isReRelease: boolean;
+}

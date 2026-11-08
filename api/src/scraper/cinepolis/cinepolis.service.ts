@@ -37,6 +37,22 @@ interface CinepolisExtractedMovieSchedule {
   schedules: CinepolisGraphqlSchedule[];
 }
 
+interface CinepolisMoviesGraphqlResponse {
+  data?: {
+    movies?: {
+      edges?: { node: { id: string; name: string } }[];
+    };
+  };
+}
+
+interface CinepolisBillboardGraphqlResponse {
+  data?: {
+    billboard?: {
+      schedules?: CinepolisGraphqlSchedule[];
+    };
+  };
+}
+
 @Injectable()
 export class CinepolisService implements ICinemaScraper {
   readonly chainKey = 'cinepolis';
@@ -98,7 +114,7 @@ export class CinepolisService implements ICinemaScraper {
             'x-apikey': 'lQM6Mkvri1iHksKKCfpAiwGXq0YUZA7Nn6XAXRPr4i13LwXo',
           };
 
-          const moviesRes = await fetch(
+          const moviesRes = (await fetch(
             'https://api-g.cinepolis.com/v2/billboards/graphql',
             {
               method: 'POST',
@@ -116,18 +132,16 @@ export class CinepolisService implements ICinemaScraper {
                   'query Movies($countryId: String!, $category: String, $cinemas: String, $limit: Int, $isAbsoluteMediaPath: Boolean) { movies(countryId: $countryId, category: $category, cinemas: $cinemas, limit: $limit, isAbsoluteMediaPath: $isAbsoluteMediaPath) { edges { node { id name } } } }',
               }),
             },
-          ).then((r) => r.json());
+          ).then((r) => r.json())) as CinepolisMoviesGraphqlResponse;
 
           const movies: { id: string; name: string }[] =
-            moviesRes?.data?.movies?.edges?.map(
-              (e: { node: { id: string; name: string } }) => e.node,
-            ) || [];
+            moviesRes?.data?.movies?.edges?.map((e) => e.node) || [];
 
           const results: CinepolisExtractedMovieSchedule[] = [];
 
           for (const movie of movies) {
             try {
-              const bbRes = await fetch(
+              const bbRes = (await fetch(
                 'https://api-g.cinepolis.com/v2/billboards/graphql',
                 {
                   method: 'POST',
@@ -144,7 +158,7 @@ export class CinepolisService implements ICinemaScraper {
                       'query Billboard($countryId: String!, $movieId: String!, $cinemas: String!, $timezone: String) { billboard(countryId: $countryId, movieId: $movieId, cinemas: $cinemas, timezone: $timezone) { schedules { cinemaId movieId dates { date languages { language displayLanguage showtimes { format { name } experience { name } datetime } } } } } }',
                   }),
                 },
-              ).then((r) => r.json());
+              ).then((r) => r.json())) as CinepolisBillboardGraphqlResponse;
 
               const schedules: CinepolisGraphqlSchedule[] =
                 bbRes?.data?.billboard?.schedules || [];

@@ -6,6 +6,7 @@ import {
   GroupedShowtimes,
   MovieDetailResponse,
   NowPlayingMovieItem,
+  UpcomingMovieItem,
 } from './movies.interface';
 import { TmdbService } from '../tmdb/tmdb.service';
 
@@ -37,8 +38,10 @@ export class MoviesService {
   private setInCache<T>(key: string, data: T, ttlSeconds: number): void {
     // Limit cache size to 500 keys to prevent unbounded memory growth
     if (this.cache.size > 500) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey) this.cache.delete(oldestKey);
+      const firstEntry = this.cache.keys().next();
+      if (!firstEntry.done) {
+        this.cache.delete(firstEntry.value);
+      }
     }
     this.cache.set(key, {
       data,
@@ -131,10 +134,19 @@ export class MoviesService {
       const nextShowtime =
         movie.showtimes.find((st) => st.dateTime >= now) || movie.showtimes[0];
 
-      const { showtimes: _, ...movieFields } = movie;
-
       return {
-        ...movieFields,
+        id: movie.id,
+        tmdbId: movie.tmdbId,
+        title: movie.title,
+        posterUrl: movie.posterUrl,
+        backdropUrl: movie.backdropUrl,
+        overview: movie.overview,
+        releaseDate: movie.releaseDate,
+        duration: movie.duration,
+        rating: movie.rating,
+        genres: movie.genres,
+        createdAt: movie.createdAt,
+        updatedAt: movie.updatedAt,
         cinemaCount: locationIds.size,
         chainNames: Array.from(chainNames),
         zones: Array.from(zones),
@@ -250,9 +262,9 @@ export class MoviesService {
     return chains;
   }
 
-  async getUpcomingMovies() {
+  async getUpcomingMovies(): Promise<UpcomingMovieItem[]> {
     const cacheKey = 'movies:upcoming';
-    const cached = this.getFromCache<any[]>(cacheKey);
+    const cached = this.getFromCache<UpcomingMovieItem[]>(cacheKey);
     if (cached) return cached;
 
     const rawMovies = await this.tmdbService.getUpcomingMovies();
