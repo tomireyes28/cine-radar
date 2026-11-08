@@ -7,10 +7,21 @@ on:
   workflow_dispatch:
     inputs:
       chain:
-        description: 'Specific chain key to scrape (leave empty to run all: atlas, multiplex, showcase, cinemark, cinemacenter, cinepolis)'
+        description: 'Specific cinema chain to scrape (or "all" for full billboard)'
         required: false
-        default: ''
-        type: string
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - atlas
+          - multiplex
+          - showcase
+          - cinemark
+          - cinemacenter
+          - cinepolis
+
+permissions:
+  contents: read
 
 jobs:
   scrape-billboard:
@@ -51,4 +62,6 @@ jobs:
         run: npm run db:seed
 
       - name: Execute Billboard Scrapers
-        run: node dist/cli/run-scrapers.js ${{ inputs.chain }}
+        env:
+          CHAIN_KEY: ${{ inputs.chain }}
+        run: node dist/cli/run-scrapers.js "$CHAIN_KEY"
