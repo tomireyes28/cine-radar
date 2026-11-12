@@ -80,7 +80,7 @@ export class CinemaCenterService implements ICinemaScraper {
         });
 
         if (movieLinks.length === 0) {
-          const error = `${city.name}: no se encontraron enlaces; no hay evidencia explícita de cartelera vacía`;
+          const error = `${city.name}: no se encontraron enlaces; empty billboard was not explicitly confirmed`;
           chainErrors.push(error);
           locationsResult.push({
             locationName: city.name,
@@ -144,14 +144,16 @@ export class CinemaCenterService implements ICinemaScraper {
                   return;
                 }
 
-                if (!moviesMap.has(cleanTitle)) {
-                  moviesMap.set(cleanTitle, {
+                const identityKey = this.normalizer.identityKey(item.rawTitle);
+                if (!moviesMap.has(identityKey)) {
+                  moviesMap.set(identityKey, {
                     rawTitle: cleanTitle,
+                    originalTitle: item.rawTitle,
                     showtimes: [],
                   });
                 }
 
-                moviesMap.get(cleanTitle)!.showtimes.push({
+                moviesMap.get(identityKey)!.showtimes.push({
                   dateTime,
                   format,
                   language,

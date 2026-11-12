@@ -153,7 +153,10 @@ export class TmdbService {
   private readonly logger = new Logger(TmdbService.name);
   private readonly baseUrl = 'https://api.themoviedb.org/3';
 
-  private readonly searchCache: BoundedTtlCache<string, TmdbResolvedMovie | null>;
+  private readonly searchCache: BoundedTtlCache<
+    string,
+    TmdbResolvedMovie | null
+  >;
   private readonly detailCache: BoundedTtlCache<
     number,
     TmdbMovieDetailApiResponse
@@ -163,7 +166,10 @@ export class TmdbService {
     TmdbMovieSearchItem[]
   >(4);
 
-  private readonly inFlightLookups = new Map<string, Promise<TmdbLookupResult>>();
+  private readonly inFlightLookups = new Map<
+    string,
+    Promise<TmdbLookupResult>
+  >();
   private readonly inFlightDetails = new Map<
     number,
     Promise<TmdbMovieDetailApiResponse | null>
@@ -219,11 +225,13 @@ export class TmdbService {
       return pending;
     }
 
-    const promise = this.executeLookup(cleanedTitle, yearHint, cacheKey).finally(
-      () => {
-        this.inFlightLookups.delete(cacheKey);
-      },
-    );
+    const promise = this.executeLookup(
+      cleanedTitle,
+      yearHint,
+      cacheKey,
+    ).finally(() => {
+      this.inFlightLookups.delete(cacheKey);
+    });
     this.inFlightLookups.set(cacheKey, promise);
     return promise;
   }
@@ -269,6 +277,22 @@ export class TmdbService {
           `No se encontró película en TMDB para: "${cleanedTitle}"`,
         );
         this.searchCache.set(cacheKey, null, this.negativeTtlMs);
+        return { status: 'not_found' };
+      }
+
+      const comparableQuery = toComparableTitleKey(cleanedTitle);
+      const exactCandidates = results.filter(
+        (item) =>
+          toComparableTitleKey(item.title || '') === comparableQuery ||
+          toComparableTitleKey(item.original_title || '') === comparableQuery,
+      );
+      if (
+        !yearHint &&
+        new Set(exactCandidates.map((item) => item.id)).size > 1
+      ) {
+        this.logger.warn(
+          `Coincidencia ambigua para "${cleanedTitle}"; se conserva identidad de origen.`,
+        );
         return { status: 'not_found' };
       }
 

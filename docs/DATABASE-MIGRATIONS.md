@@ -51,3 +51,8 @@ npx prisma migrate status
 ```
 
 A partir de este punto, toda evolución posterior del esquema (por ejemplo, nuevas tablas o columnas) se aplica únicamente con `npx prisma migrate deploy`.
+
+
+## Etapa 1, R03: alias de películas
+
+`20261111143000_add_movie_source_aliases` es aditiva y debe aplicarse antes de ejecutar el worker de la etapa 1. Agrega `MovieAlias` con clave de origen, título original y FK a Movie. No modifica migraciones anteriores ni reasigna funciones heredadas. Validar primero en una copia aislada y seguir el procedimiento de despliegue descrito arriba.

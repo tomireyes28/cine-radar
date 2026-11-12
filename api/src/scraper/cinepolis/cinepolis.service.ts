@@ -182,7 +182,7 @@ export async function evaluateCinepolisBillboard(
     );
 
   if (movies.length !== edges.length)
-    throw new Error('GraphQL Movies contiene pel�culas inv�lidas');
+    throw new Error('GraphQL Movies contiene invalid movies');
 
   const schedules: CinepolisExtractedMovieSchedule[] = [];
   const failedMovies: CinepolisFailedMovie[] = [];
@@ -348,7 +348,7 @@ export class CinepolisService implements ICinemaScraper {
         const cleanTitle = this.normalizer.normalize(item.movieName);
         if (!cleanTitle) {
           hasPartialMovieFailures = true;
-          chainErrors.push('T�tulo inv�lido');
+          chainErrors.push('Invalid title');
           continue;
         }
 
@@ -356,7 +356,7 @@ export class CinepolisService implements ICinemaScraper {
           if (!validCinepolisSchedule(sched)) {
             hasPartialMovieFailures = true;
             chainErrors.push(
-              `Estructura de horarios inv�lida: ${item.movieName}`,
+              `Invalid schedule structure: ${item.movieName}`,
             );
             continue;
           }
@@ -371,13 +371,19 @@ export class CinepolisService implements ICinemaScraper {
           }
           const locMovies = locationsMap.get(locConfig.name)!;
 
-          if (!locMovies.has(cleanTitle)) {
-            locMovies.set(cleanTitle, {
+          const identityKey = this.normalizer.identityKey(
+            item.movieName,
+            sched.movieId,
+          );
+          if (!locMovies.has(identityKey)) {
+            locMovies.set(identityKey, {
               rawTitle: cleanTitle,
+              originalTitle: item.movieName,
+              sourceMovieId: sched.movieId,
               showtimes: [],
             });
           }
-          const movieEntry = locMovies.get(cleanTitle)!;
+          const movieEntry = locMovies.get(identityKey)!;
 
           for (const dateGroup of sched.dates || []) {
             for (const langGroup of dateGroup.languages || []) {

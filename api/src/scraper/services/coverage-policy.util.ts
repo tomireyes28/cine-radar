@@ -31,7 +31,7 @@ export function enforceVerifiedCoverage(
     const emptyConsistent =
       location.status !== 'empty_verified' || rows.length === 0;
     if (bounded && rowsValid && emptyConsistent) return location;
-    const error = `[${location.locationName}] Cobertura de extracci�n desconocida, inv�lida o inconsistente; se preservan las funciones ausentes.`;
+    const error = `[${location.locationName}] Unknown, invalid or inconsistent coverage; absent showtimes are preserved.`;
     errors.push(error);
     return {
       ...location,

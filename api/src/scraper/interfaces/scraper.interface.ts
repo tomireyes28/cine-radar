@@ -1,10 +1,6 @@
 export { buildArgentinaDate } from '../../common/utils/argentina-time.util';
 
-export type ScrapeStatus =
-  | 'complete'
-  | 'empty_verified'
-  | 'partial'
-  | 'failed';
+export type ScrapeStatus = 'complete' | 'empty_verified' | 'partial' | 'failed';
 
 export interface ScrapedShowtimeItem {
   dateTime: Date;
@@ -15,6 +11,8 @@ export interface ScrapedShowtimeItem {
 
 export interface ScrapedMovieItem {
   rawTitle: string;
+  originalTitle?: string;
+  sourceMovieId?: string;
   showtimes: ScrapedShowtimeItem[];
 }
 
@@ -76,7 +74,10 @@ export function deriveChainScrapeStatus(
     }
   }
 
-  if (failedCount === locations.length || completeCount + emptyVerifiedCount + partialCount === 0) {
+  if (
+    failedCount === locations.length ||
+    completeCount + emptyVerifiedCount + partialCount === 0
+  ) {
     return 'failed';
   }
 

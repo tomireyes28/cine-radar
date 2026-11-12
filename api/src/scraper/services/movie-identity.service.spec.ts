@@ -15,6 +15,11 @@ interface InMemoryShowtime {
 }
 
 interface InMemoryPrisma {
+  movieAlias: {
+    updateMany: jest.Mock;
+    findUnique: jest.Mock;
+    upsert: jest.Mock;
+  };
   movies: Movie[];
   showtimes: InMemoryShowtime[];
   movie: {
@@ -35,8 +40,57 @@ function createInMemoryPrisma(): InMemoryPrisma {
   let nextShowtimeId = 1;
   const movies: Movie[] = [];
   const showtimes: InMemoryShowtime[] = [];
+  const aliases = new Map<
+    string,
+    { key: string; movieId: number; originalTitle: string }
+  >();
 
   const api: InMemoryPrisma = {
+    movieAlias: {
+      findUnique: jest.fn(({ where }: { where: { key: string } }) => {
+        const alias = aliases.get(where.key);
+        return Promise.resolve(
+          alias
+            ? {
+                ...alias,
+                movie: movies.find((movie) => movie.id === alias.movieId),
+              }
+            : null,
+        );
+      }),
+      upsert: jest.fn(
+        ({
+          where,
+          create,
+          update,
+        }: {
+          where: { key: string };
+          create: { key: string; movieId: number; originalTitle: string };
+          update: { movieId: number; originalTitle: string };
+        }) => {
+          const alias = { ...(aliases.get(where.key) ?? create), ...update };
+          aliases.set(where.key, alias);
+          return Promise.resolve(alias);
+        },
+      ),
+      updateMany: jest.fn(
+        ({
+          where,
+          data,
+        }: {
+          where: { movieId: number };
+          data: { movieId: number };
+        }) => {
+          let count = 0;
+          for (const alias of aliases.values())
+            if (alias.movieId === where.movieId) {
+              alias.movieId = data.movieId;
+              count++;
+            }
+          return Promise.resolve({ count });
+        },
+      ),
+    },
     movies,
     showtimes,
     movie: {
@@ -57,11 +111,7 @@ function createInMemoryPrisma(): InMemoryPrisma {
         },
       ),
       create: jest.fn(
-        ({
-          data,
-        }: {
-          data: Omit<Movie, 'id' | 'createdAt' | 'updatedAt'>;
-        }) => {
+        ({ data }: { data: Omit<Movie, 'id' | 'createdAt' | 'updatedAt'> }) => {
           const now = new Date();
           const created: Movie = {
             id: nextMovieId++,
@@ -84,13 +134,7 @@ function createInMemoryPrisma(): InMemoryPrisma {
         },
       ),
       update: jest.fn(
-        ({
-          where,
-          data,
-        }: {
-          where: { id: number };
-          data: Partial<Movie>;
-        }) => {
+        ({ where, data }: { where: { id: number }; data: Partial<Movie> }) => {
           const idx = movies.findIndex((m) => m.id === where.id);
           if (idx === -1) throw new Error('Movie not found');
           movies[idx] = {
@@ -335,5 +379,115 @@ describe('MovieIdentityService (F08)', () => {
     expect(db.movies[0].id).toBe(canonicalId);
     expect(db.showtimes).toHaveLength(1);
     expect(db.showtimes[0].movieId).toBe(canonicalId);
+  });
+});
+
+describe('R03 source identities, release years and persistent aliases', () => {
+  const info = (id: number, title: string, year: number): TmdbLookupResult => ({
+    status: 'matched',
+    movie: {
+      tmdbId: id,
+      officialTitle: title,
+      posterUrl: null,
+      backdropUrl: null,
+      overview: '',
+      releaseDate: `${year}-01-01`,
+      duration: null,
+      rating: null,
+      genres: [],
+    },
+  });
+  function setup() {
+    const db = createInMemoryPrisma();
+    const lookup = jest.fn<Promise<TmdbLookupResult>, [string]>();
+    const service = new MovieIdentityService(
+      db as unknown as PrismaService,
+      { lookupMovie: lookup } as unknown as TmdbService,
+      new TitleNormalizerService(),
+    );
+    return { db, lookup, service };
+  }
+  it('keeps classic and remake separate and passes both original year hints to TMDB', async () => {
+    const { db, lookup, service } = setup();
+    lookup
+      .mockResolvedValueOnce(info(1, 'Batman', 1989))
+      .mockResolvedValueOnce(info(2, 'Batman', 2022));
+    const cache = new Map<string, number | null>();
+    const classic = await service.resolveAndUpsertMovie('Batman', cache, {
+      provider: 'atlas',
+      originalTitle: 'Batman (1989) 2D',
+    });
+    const remake = await service.resolveAndUpsertMovie('Batman', cache, {
+      provider: 'atlas',
+      originalTitle: 'Batman (2022) 3D',
+    });
+    expect(classic).not.toBe(remake);
+    expect(db.movies).toHaveLength(2);
+    expect(lookup.mock.calls.map((args) => args[0])).toEqual([
+      'Batman (1989) 2D',
+      'Batman (2022) 3D',
+    ]);
+  });
+  it('retains independent provider IDs and providers even when title/year are absent and TMDB is offline', async () => {
+    const { db, lookup, service } = setup();
+    lookup.mockResolvedValue({ status: 'transient_error', reason: 'offline' });
+    const cache = new Map<string, number | null>();
+    const a = await service.resolveAndUpsertMovie('Batman', cache, {
+      provider: 'cinemark',
+      sourceMovieId: '1',
+    });
+    const b = await service.resolveAndUpsertMovie('Batman', cache, {
+      provider: 'cinemark',
+      sourceMovieId: '2',
+    });
+    const c = await service.resolveAndUpsertMovie('Batman', cache, {
+      provider: 'cinepolis',
+      sourceMovieId: '1',
+    });
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect(db.movies).toHaveLength(3);
+  });
+  it('reconciles an offline alias and remembers the canonical ID across later outages', async () => {
+    const { db, lookup, service } = setup();
+    lookup.mockResolvedValueOnce(info(555, 'Duna', 2024));
+    const a = await service.resolveAndUpsertMovie('Duna', new Map(), {
+      provider: 'atlas',
+      originalTitle: 'Duna (2024)',
+    });
+    lookup.mockResolvedValueOnce({
+      status: 'transient_error',
+      reason: 'offline',
+    });
+    const b = await service.resolveAndUpsertMovie('Dune', new Map(), {
+      provider: 'cinemark',
+      sourceMovieId: 'm1',
+      originalTitle: 'Dune (2024)',
+    });
+    expect(a).not.toBe(b);
+    lookup.mockResolvedValueOnce(info(555, 'Duna', 2024));
+    expect(
+      await service.resolveAndUpsertMovie('Dune', new Map(), {
+        provider: 'cinemark',
+        sourceMovieId: 'm1',
+        originalTitle: 'Dune (2024)',
+      }),
+    ).toBe(a);
+    lookup
+      .mockClear()
+      .mockResolvedValue({ status: 'transient_error', reason: 'offline' });
+    expect(
+      await service.resolveAndUpsertMovie('Dune doblada', new Map(), {
+        provider: 'cinemark',
+        sourceMovieId: 'm1',
+      }),
+    ).toBe(a);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(db.movies).toHaveLength(1);
+  });
+  it('refuses TMDB metadata from the wrong year even if a search proposes a match', async () => {
+    const { db, lookup, service } = setup();
+    lookup.mockResolvedValue(info(1, 'Batman', 2022));
+    await service.resolveAndUpsertMovie('Batman (1989)', new Map());
+    expect(db.movies[0].tmdbId).toBeNull();
   });
 });

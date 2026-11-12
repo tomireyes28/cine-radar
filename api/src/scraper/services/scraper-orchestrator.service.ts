@@ -576,6 +576,11 @@ export class ScraperOrchestratorService {
           const dbMovieId = await this.movieIdentity.resolveAndUpsertMovie(
             movieItem.rawTitle,
             resolvedMovieDbIds,
+            {
+              provider: chainKey,
+              sourceMovieId: movieItem.sourceMovieId,
+              originalTitle: movieItem.originalTitle,
+            },
           );
           if (!dbMovieId) {
             venueDiscarded += movieItem.showtimes.length;

@@ -160,9 +160,15 @@ export class CinemarkService implements ICinemaScraper {
               continue;
             }
 
-            if (!moviesMap.has(cleanTitle)) {
-              moviesMap.set(cleanTitle, {
+            const identityKey = this.normalizer.identityKey(
+              session.movieName,
+              session.movieId,
+            );
+            if (!moviesMap.has(identityKey)) {
+              moviesMap.set(identityKey, {
                 rawTitle: cleanTitle,
+                originalTitle: session.movieName,
+                sourceMovieId: session.movieId,
                 showtimes: [],
               });
             }
@@ -174,7 +180,7 @@ export class CinemarkService implements ICinemaScraper {
               session.language?.name || session.language?.shortName,
             );
 
-            moviesMap.get(cleanTitle)!.showtimes.push({
+            moviesMap.get(identityKey)!.showtimes.push({
               dateTime,
               format,
               language,

@@ -104,9 +104,11 @@ export class AtlasService implements ICinemaScraper {
             continue;
           }
 
-          if (!moviesMap.has(normalizedKey)) {
-            moviesMap.set(normalizedKey, {
+          const identityKey = this.normalizer.identityKey(rawTitle);
+          if (!moviesMap.has(identityKey)) {
+            moviesMap.set(identityKey, {
               rawTitle: normalizedKey,
+              originalTitle: rawTitle,
               showtimes: [],
             });
           }
@@ -114,7 +116,7 @@ export class AtlasService implements ICinemaScraper {
           const format = this.normalizer.normalizeFormat(rawTitle);
           const language = this.normalizer.normalizeLanguage(rawTitle);
 
-          moviesMap.get(normalizedKey)!.showtimes.push({
+          moviesMap.get(identityKey)!.showtimes.push({
             dateTime,
             format,
             language,

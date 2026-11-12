@@ -135,13 +135,19 @@ export class ShowcaseService implements ICinemaScraper {
               const isImaxVenue = cinemaName.toUpperCase().includes('IMAX');
               const locMovies = locationsMap.get(locConfig.name)!;
 
-              if (!locMovies.has(cleanTitle)) {
-                locMovies.set(cleanTitle, {
+              const identityKey = this.normalizer.identityKey(
+                tree.name,
+                filmId,
+              );
+              if (!locMovies.has(identityKey)) {
+                locMovies.set(identityKey, {
                   rawTitle: cleanTitle,
+                  originalTitle: tree.name,
+                  sourceMovieId: filmId,
                   showtimes: [],
                 });
               }
-              const movieEntry = locMovies.get(cleanTitle)!;
+              const movieEntry = locMovies.get(identityKey)!;
 
               for (const fmt of cinema.formats || []) {
                 const baseDesc = fmt?.formatDescription || '';

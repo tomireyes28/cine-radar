@@ -1,3 +1,4 @@
+import { extractReleaseYearHint } from '../../common/utils/title-normalizer.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { TmdbResolvedMovie, TmdbService } from '../../tmdb/tmdb.service';
@@ -19,7 +20,9 @@ export class MovieIdentityService {
   } {
     const normalized = this.normalizer.normalize(rawTitle).trim();
     const displayTitle = normalized || rawTitle.trim();
-    const normalizedKey = displayTitle.toLowerCase();
+    const year = extractReleaseYearHint(rawTitle);
+    const normalizedKey =
+      displayTitle.toLowerCase() + (year ? `#year:${year}` : '');
     return { normalizedKey, displayTitle };
   }
 
@@ -32,9 +35,26 @@ export class MovieIdentityService {
   async resolveAndUpsertMovie(
     rawTitle: string,
     runCache: Map<string, number | null>,
+    context?: {
+      provider: string;
+      sourceMovieId?: string;
+      originalTitle?: string;
+    },
   ): Promise<number | null> {
-    const { normalizedKey, displayTitle } = this.buildNormalizedKey(rawTitle);
-    if (!normalizedKey) {
+    const originalTitle = context?.originalTitle ?? rawTitle;
+    const titleIdentity = this.buildNormalizedKey(originalTitle);
+    const displayTitle = titleIdentity.displayTitle;
+    // A provider ID is stronger than a title. Without an ID, retain provider + year.
+    const normalizedKey = context
+      ? JSON.stringify([
+          'provider',
+          context.provider,
+          context.sourceMovieId
+            ? ['id', context.sourceMovieId]
+            : ['title', titleIdentity.normalizedKey],
+        ])
+      : titleIdentity.normalizedKey;
+    if (!displayTitle) {
       return null;
     }
 
@@ -42,17 +62,43 @@ export class MovieIdentityService {
       return runCache.get(normalizedKey) ?? null;
     }
 
-    const existingByKey = await this.prisma.movie.findUnique({
-      where: { normalizedKey },
-    });
+    const sourceAlias = context
+      ? await this.prisma.movieAlias.findUnique({
+          where: { key: normalizedKey },
+          include: { movie: true },
+        })
+      : null;
+    const existingByKey =
+      sourceAlias?.movie ??
+      (await this.prisma.movie.findUnique({
+        where: { normalizedKey },
+      }));
+    const remember = async (id: number): Promise<number> => {
+      if (context)
+        await this.prisma.movieAlias.upsert({
+          where: { key: normalizedKey },
+          create: { key: normalizedKey, movieId: id, originalTitle },
+          update: { movieId: id, originalTitle },
+        });
+      runCache.set(normalizedKey, id);
+      return id;
+    };
 
     // Fast path: already enriched with a verified TMDB ID
     if (existingByKey && existingByKey.tmdbId !== null) {
-      runCache.set(normalizedKey, existingByKey.id);
-      return existingByKey.id;
+      return remember(existingByKey.id);
     }
 
-    const lookup = await this.tmdbService.lookupMovie(displayTitle);
+    let lookup = await this.tmdbService.lookupMovie(originalTitle);
+    const yearHint = extractReleaseYearHint(originalTitle);
+    if (
+      lookup.status === 'matched' &&
+      yearHint &&
+      Number(lookup.movie.releaseDate?.slice(0, 4)) !== yearHint
+    ) {
+      // Do not attach a known classic/remake to metadata from a different release.
+      lookup = { status: 'not_found' };
+    }
 
     if (lookup.status !== 'matched') {
       if (existingByKey) {
@@ -62,8 +108,7 @@ export class MovieIdentityService {
             data: { tmdbStatus: lookup.status },
           });
         }
-        runCache.set(normalizedKey, existingByKey.id);
-        return existingByKey.id;
+        return remember(existingByKey.id);
       }
 
       const created = await this.prisma.movie.create({
@@ -77,8 +122,7 @@ export class MovieIdentityService {
         },
       });
 
-      runCache.set(normalizedKey, created.id);
-      return created.id;
+      return remember(created.id);
     }
 
     const info = lookup.movie;
@@ -92,8 +136,7 @@ export class MovieIdentityService {
         where: { id: existingByKey.id },
         data: this.buildEnrichedMovieData(info),
       });
-      runCache.set(normalizedKey, updated.id);
-      return updated.id;
+      return remember(updated.id);
     }
 
     // Case 2: Both an unmatched key record and a canonical TMDB record exist -> reconcile showtimes & merge
@@ -125,6 +168,10 @@ export class MovieIdentityService {
           });
         }
 
+        await tx.movieAlias.updateMany({
+          where: { movieId: existingByKey.id },
+          data: { movieId: existingByTmdb.id },
+        });
         await tx.movie.delete({
           where: { id: existingByKey.id },
         });
@@ -135,8 +182,7 @@ export class MovieIdentityService {
         });
       });
 
-      runCache.set(normalizedKey, existingByTmdb.id);
-      return existingByTmdb.id;
+      return remember(existingByTmdb.id);
     }
 
     // Case 3: Canonical TMDB record already exists (same movie under another alias or same key)
@@ -145,8 +191,7 @@ export class MovieIdentityService {
         where: { id: existingByTmdb.id },
         data: this.buildEnrichedMovieData(info),
       });
-      runCache.set(normalizedKey, updated.id);
-      return updated.id;
+      return remember(updated.id);
     }
 
     // Case 4: Brand new movie with verified TMDB match
@@ -157,8 +202,7 @@ export class MovieIdentityService {
       },
     });
 
-    runCache.set(normalizedKey, created.id);
-    return created.id;
+    return remember(created.id);
   }
 
   private buildEnrichedMovieData(info: TmdbResolvedMovie) {

@@ -41,7 +41,12 @@ describe('TmdbService Candidate Selection & Shared Normalization (F11)', () => {
       },
     ];
 
-    const best = selectBestTmdbCandidate(candidates, 'Nosferatu', undefined, 2026);
+    const best = selectBestTmdbCandidate(
+      candidates,
+      'Nosferatu',
+      undefined,
+      2026,
+    );
     expect(best.id).toBe(426063);
   });
 
@@ -157,5 +162,38 @@ describe('TmdbService Candidate Selection & Shared Normalization (F11)', () => {
     await expect(unconfigured.getUpcomingMovies()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
     );
+  });
+});
+
+describe('R03 TMDB ambiguous homonyms', () => {
+  const previous = process.env.TMDB_API_KEY;
+  afterEach(() => {
+    jest.restoreAllMocks();
+    if (previous === undefined) delete process.env.TMDB_API_KEY;
+    else process.env.TMDB_API_KEY = previous;
+  });
+  it('does not enrich yearless titles by guessing between exact homonyms', async () => {
+    process.env.TMDB_API_KEY = 'test';
+    const request = jest.spyOn(axios, 'get').mockResolvedValue({
+      data: {
+        results: [
+          {
+            id: 1,
+            title: 'Batman',
+            release_date: '1989-01-01',
+            poster_path: null,
+          },
+          {
+            id: 2,
+            title: 'Batman',
+            release_date: '2022-01-01',
+            poster_path: null,
+          },
+        ],
+      },
+    });
+    const result = await new TmdbService().lookupMovie('Batman');
+    expect(result.status).toBe('not_found');
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

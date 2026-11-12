@@ -131,14 +131,20 @@ export class MultiplexService implements ICinemaScraper {
           if (matchingShows.length === 0) continue;
 
           const locMovies = locationsMap.get(locConfig.name)!;
-          if (!locMovies.has(cleanTitle)) {
-            locMovies.set(cleanTitle, {
+          const identityKey = this.normalizer.identityKey(
+            rawTitle,
+            movieUrl !== url ? movieUrl : undefined,
+          );
+          if (!locMovies.has(identityKey)) {
+            locMovies.set(identityKey, {
               rawTitle: cleanTitle,
+              originalTitle: rawTitle,
+              sourceMovieId: movieUrl !== url ? movieUrl : undefined,
               showtimes: [],
             });
           }
 
-          const movieEntry = locMovies.get(cleanTitle)!;
+          const movieEntry = locMovies.get(identityKey)!;
 
           for (const f of matchingShows) {
             const isoDatePart = this.parseMultiplexDate(f.dia!);

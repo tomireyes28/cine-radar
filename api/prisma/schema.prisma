@@ -8,10 +8,10 @@ datasource db {
 }
 
 model Movie {
-  id            Int        @id @default(autoincrement())
-  tmdbId        Int?       @unique
-  normalizedKey String     @unique
-  tmdbStatus    String     @default("pending")
+  id            Int          @id @default(autoincrement())
+  tmdbId        Int?         @unique
+  normalizedKey String       @unique
+  tmdbStatus    String       @default("pending")
   title         String
   posterUrl     String?
   backdropUrl   String?
@@ -19,10 +19,11 @@ model Movie {
   releaseDate   String?
   duration      Int?
   rating        String?
-  genres        String[]   @default([])
+  genres        String[]     @default([])
+  aliases       MovieAlias[]
   showtimes     Showtime[]
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
 }
 
 model CinemaChain {
@@ -94,4 +95,13 @@ model ScrapeRun {
   summaryJson        Json?
 
   @@index([completedAt(sort: Desc)])
+}
+
+model MovieAlias {
+  key           String @id
+  movieId       Int
+  originalTitle String
+  movie         Movie  @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@index([movieId])
 }
