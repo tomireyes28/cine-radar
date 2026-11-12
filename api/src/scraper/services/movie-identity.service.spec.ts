@@ -32,6 +32,7 @@ interface InMemoryPrisma {
     findMany: jest.Mock;
     createMany: jest.Mock;
   };
+  $executeRaw: jest.Mock;
   $transaction: jest.Mock;
 }
 
@@ -46,6 +47,7 @@ function createInMemoryPrisma(): InMemoryPrisma {
   >();
 
   const api: InMemoryPrisma = {
+    $executeRaw: jest.fn().mockResolvedValue(1),
     movieAlias: {
       findUnique: jest.fn(({ where }: { where: { key: string } }) => {
         const alias = aliases.get(where.key);

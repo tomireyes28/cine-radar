@@ -17,3 +17,11 @@ En CI se usa el servicio PostgreSQL 15 existente y una base distinta a la del se
 Verificación local R06: PostgreSQL nativo 15.19 en `127.0.0.1:55439`, clúster temporal en `api/.tmp`, sin Docker y sin tocar la base configurada. Siete pruebas verifican sesiones independientes, IDs y deduplicación, actualización diferencial, rollback real por trigger, preservación de fechas, lease exclusiva y reconciliación con FK/alias.
 
 Estas pruebas no simulan un pooler Supabase: comprueban PostgreSQL y Prisma mediante conexiones independientes. La topología y límites del pooler productivo requieren una comprobación separada en staging.
+
+## R04: resolución concurrente de identidad
+
+Se reprodujeron conflictos de unicidad reales por clave de origen y por TMDB antes de la corrección. Ahora las consultas externas se completan antes de iniciar la transacción; dentro de ella se toman advisory locks transaccionales por origen y TMDB en orden estable, se releen los registros y se actualizan película/funciones/alias en conjunto. El mapa de la corrida no reemplaza la consulta de alias persistente, porque un ID temporal puede haber sido reconciliado por otra ejecución.
+
+La resolución reintenta como máximo tres transacciones ante conflictos de unicidad, deadlocks/conflictos de escritura o un registro concurrentemente eliminado; no repite consultas externas ni oculta otros errores. Las pruebas de PostgreSQL usan barreras para que ambos clientes lleguen a la carrera a la vez, incluyendo dos cadenas con el mismo TMDB, el mismo origen sin TMDB, reconciliación de dos temporales y rollback completo cuando falla el alias.
+
+El advisory lock se libera al terminar la transacción, no depende de conservar la misma conexión después del commit. La integración sigue ejecutándose sobre PostgreSQL directo; no certifica la configuración de un pooler externo.

@@ -1,7 +1,12 @@
+import { Prisma } from '@prisma/client';
 import { extractReleaseYearHint } from '../../common/utils/title-normalizer.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { TmdbResolvedMovie, TmdbService } from '../../tmdb/tmdb.service';
+import {
+  TmdbLookupResult,
+  TmdbResolvedMovie,
+  TmdbService,
+} from '../../tmdb/tmdb.service';
 import { TitleNormalizerService } from './title-normalizer.service';
 
 @Injectable()
@@ -58,151 +63,147 @@ export class MovieIdentityService {
       return null;
     }
 
-    if (runCache.has(normalizedKey)) {
-      return runCache.get(normalizedKey) ?? null;
-    }
-
-    const sourceAlias = context
-      ? await this.prisma.movieAlias.findUnique({
-          where: { key: normalizedKey },
-          include: { movie: true },
-        })
-      : null;
-    const existingByKey =
-      sourceAlias?.movie ??
-      (await this.prisma.movie.findUnique({
-        where: { normalizedKey },
-      }));
-    const remember = async (id: number): Promise<number> => {
-      if (context)
-        await this.prisma.movieAlias.upsert({
-          where: { key: normalizedKey },
-          create: { key: normalizedKey, movieId: id, originalTitle },
-          update: { movieId: id, originalTitle },
-        });
-      runCache.set(normalizedKey, id);
-      return id;
+    const findExisting = async (
+      db: Pick<Prisma.TransactionClient, 'movie' | 'movieAlias'>,
+    ) => {
+      const alias = context
+        ? await db.movieAlias.findUnique({
+            where: { key: normalizedKey },
+            include: { movie: true },
+          })
+        : null;
+      return alias?.movie ?? db.movie.findUnique({ where: { normalizedKey } });
     };
-
-    // Fast path: already enriched with a verified TMDB ID
-    if (existingByKey && existingByKey.tmdbId !== null) {
-      return remember(existingByKey.id);
-    }
-
-    let lookup = await this.tmdbService.lookupMovie(originalTitle);
+    // Persistent aliases are authoritative: a run cache may refer to a merged/deleted temporary ID.
+    const prior = await findExisting(this.prisma);
+    let lookup: TmdbLookupResult | null =
+      prior?.tmdbId != null
+        ? null
+        : await this.tmdbService.lookupMovie(originalTitle);
     const yearHint = extractReleaseYearHint(originalTitle);
     if (
-      lookup.status === 'matched' &&
+      lookup?.status === 'matched' &&
       yearHint &&
       Number(lookup.movie.releaseDate?.slice(0, 4)) !== yearHint
     ) {
-      // Do not attach a known classic/remake to metadata from a different release.
       lookup = { status: 'not_found' };
     }
+    const lockKeys = [`cine-radar:movie:source:${normalizedKey}`];
+    const tmdbId =
+      lookup?.status === 'matched' ? lookup.movie.tmdbId : prior?.tmdbId;
+    if (tmdbId != null) lockKeys.push(`cine-radar:movie:tmdb:${tmdbId}`);
+    lockKeys.sort();
 
-    if (lookup.status !== 'matched') {
-      if (existingByKey) {
-        if (existingByKey.tmdbStatus !== lookup.status) {
-          await this.prisma.movie.update({
-            where: { id: existingByKey.id },
-            data: { tmdbStatus: lookup.status },
-          });
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await this.prisma.$transaction(
+          async (tx) => {
+            // Transaction-scoped locks survive pooling and release on commit/rollback.
+            for (const key of lockKeys)
+              await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+            const existing = await findExisting(tx);
+            const remember = async (id: number, mergedFrom?: number) => {
+              if (context)
+                await tx.movieAlias.upsert({
+                  where: { key: normalizedKey },
+                  create: { key: normalizedKey, movieId: id, originalTitle },
+                  update: { movieId: id, originalTitle },
+                });
+              return { id, mergedFrom };
+            };
+            if (existing?.tmdbId != null) return remember(existing.id);
+            const resolved = lookup ?? {
+              status: 'transient_error' as const,
+              reason: 'Identity changed while resolving',
+            };
+            if (resolved.status !== 'matched') {
+              const movie = existing
+                ? await tx.movie.update({
+                    where: { id: existing.id },
+                    data: { tmdbStatus: resolved.status },
+                  })
+                : await tx.movie.create({
+                    data: {
+                      normalizedKey,
+                      tmdbId: null,
+                      tmdbStatus: resolved.status,
+                      title: displayTitle,
+                      overview: '',
+                      genres: [],
+                    },
+                  });
+              return remember(movie.id);
+            }
+            const info = resolved.movie;
+            const canonical = await tx.movie.findUnique({
+              where: { tmdbId: info.tmdbId },
+            });
+            if (existing && canonical && existing.id !== canonical.id) {
+              const orphanShowtimes = await tx.showtime.findMany({
+                where: { movieId: existing.id },
+              });
+              if (orphanShowtimes.length)
+                await tx.showtime.createMany({
+                  data: orphanShowtimes.map((st) => ({
+                    movieId: canonical.id,
+                    locationId: st.locationId,
+                    dateTime: st.dateTime,
+                    format: st.format,
+                    language: st.language,
+                    ticketUrl: st.ticketUrl,
+                  })),
+                  skipDuplicates: true,
+                });
+              await tx.movieAlias.updateMany({
+                where: { movieId: existing.id },
+                data: { movieId: canonical.id },
+              });
+              await tx.movie.delete({ where: { id: existing.id } });
+              await tx.movie.update({
+                where: { id: canonical.id },
+                data: this.buildEnrichedMovieData(info),
+              });
+              return remember(canonical.id, existing.id);
+            }
+            const target = canonical ?? existing;
+            const movie = target
+              ? await tx.movie.update({
+                  where: { id: target.id },
+                  data: this.buildEnrichedMovieData(info),
+                })
+              : await tx.movie.create({
+                  data: { normalizedKey, ...this.buildEnrichedMovieData(info) },
+                });
+            return remember(movie.id);
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+            maxWait: 5000,
+            timeout: 15000,
+          },
+        );
+        if (result.mergedFrom !== undefined) {
+          for (const [key, id] of runCache)
+            if (id === result.mergedFrom) runCache.set(key, result.id);
         }
-        return remember(existingByKey.id);
+        runCache.set(normalizedKey, result.id);
+        return result.id;
+      } catch (error: unknown) {
+        const code =
+          error instanceof Prisma.PrismaClientKnownRequestError
+            ? error.code
+            : undefined;
+        if (
+          attempt >= 2 ||
+          !code ||
+          !['P2002', 'P2034', 'P2025'].includes(code)
+        )
+          throw error;
+        this.logger.warn(
+          `Retrying concurrent movie resolution (${code}, attempt ${attempt + 1})`,
+        );
       }
-
-      const created = await this.prisma.movie.create({
-        data: {
-          normalizedKey,
-          tmdbId: null,
-          tmdbStatus: lookup.status,
-          title: displayTitle,
-          overview: '',
-          genres: [],
-        },
-      });
-
-      return remember(created.id);
     }
-
-    const info = lookup.movie;
-    const existingByTmdb = await this.prisma.movie.findUnique({
-      where: { tmdbId: info.tmdbId },
-    });
-
-    // Case 1: Movie was created earlier without TMDB (outage or pre-indexing) -> enrich in-place
-    if (existingByKey && !existingByTmdb) {
-      const updated = await this.prisma.movie.update({
-        where: { id: existingByKey.id },
-        data: this.buildEnrichedMovieData(info),
-      });
-      return remember(updated.id);
-    }
-
-    // Case 2: Both an unmatched key record and a canonical TMDB record exist -> reconcile showtimes & merge
-    if (
-      existingByKey &&
-      existingByTmdb &&
-      existingByKey.id !== existingByTmdb.id
-    ) {
-      this.logger.log(
-        `Reconciliando película temporal #${existingByKey.id} ("${existingByKey.title}") en película TMDB #${existingByTmdb.id} (tmdbId=${info.tmdbId})`,
-      );
-
-      await this.prisma.$transaction(async (tx) => {
-        const orphanShowtimes = await tx.showtime.findMany({
-          where: { movieId: existingByKey.id },
-        });
-
-        if (orphanShowtimes.length > 0) {
-          await tx.showtime.createMany({
-            data: orphanShowtimes.map((st) => ({
-              movieId: existingByTmdb.id,
-              locationId: st.locationId,
-              dateTime: st.dateTime,
-              format: st.format,
-              language: st.language,
-              ticketUrl: st.ticketUrl,
-            })),
-            skipDuplicates: true,
-          });
-        }
-
-        await tx.movieAlias.updateMany({
-          where: { movieId: existingByKey.id },
-          data: { movieId: existingByTmdb.id },
-        });
-        await tx.movie.delete({
-          where: { id: existingByKey.id },
-        });
-
-        await tx.movie.update({
-          where: { id: existingByTmdb.id },
-          data: this.buildEnrichedMovieData(info),
-        });
-      });
-
-      return remember(existingByTmdb.id);
-    }
-
-    // Case 3: Canonical TMDB record already exists (same movie under another alias or same key)
-    if (existingByTmdb) {
-      const updated = await this.prisma.movie.update({
-        where: { id: existingByTmdb.id },
-        data: this.buildEnrichedMovieData(info),
-      });
-      return remember(updated.id);
-    }
-
-    // Case 4: Brand new movie with verified TMDB match
-    const created = await this.prisma.movie.create({
-      data: {
-        normalizedKey,
-        ...this.buildEnrichedMovieData(info),
-      },
-    });
-
-    return remember(created.id);
   }
 
   private buildEnrichedMovieData(info: TmdbResolvedMovie) {
