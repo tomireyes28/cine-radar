@@ -277,7 +277,7 @@ export class CinepolisService implements ICinemaScraper {
     });
   }
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log(
       'Iniciando recolección en Cinépolis (GraphQL v2 via Single Browser Context)...',
     );
@@ -291,13 +291,23 @@ export class CinepolisService implements ICinemaScraper {
 
     let browser: import('puppeteer').Browser | null = null;
     let page: import('puppeteer').Page | null = null;
+    let abortBrowser: (() => void) | undefined;
 
     const apiKey =
       process.env.CINEPOLIS_PUBLIC_API_KEY?.trim() ||
       DEFAULT_CINEPOLIS_PUBLIC_API_KEY;
 
     try {
+      signal?.throwIfAborted();
       browser = await this.launchBrowser();
+      abortBrowser = () => {
+        void browser?.close().catch(() => undefined);
+      };
+      signal?.addEventListener('abort', abortBrowser, { once: true });
+      if (signal?.aborted) {
+        abortBrowser();
+        signal.throwIfAborted();
+      }
       page = await browser.newPage();
       page.setDefaultTimeout(20_000);
 
@@ -355,9 +365,7 @@ export class CinepolisService implements ICinemaScraper {
         for (const sched of item.schedules) {
           if (!validCinepolisSchedule(sched)) {
             hasPartialMovieFailures = true;
-            chainErrors.push(
-              `Invalid schedule structure: ${item.movieName}`,
-            );
+            chainErrors.push(`Invalid schedule structure: ${item.movieName}`);
             continue;
           }
           const locConfig = locationBySlug.get(sched.cinemaId);
@@ -416,6 +424,7 @@ export class CinepolisService implements ICinemaScraper {
       chainErrors.push(msg);
       topLevelFailure = true;
     } finally {
+      if (abortBrowser) signal?.removeEventListener('abort', abortBrowser);
       if (page) {
         await page.close().catch(() => undefined);
       }

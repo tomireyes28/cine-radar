@@ -38,7 +38,7 @@ export class MultiplexService implements ICinemaScraper {
     return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
   }
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log('Iniciando recolección en Multiplex (HTTP + Cheerio)...');
     const url = 'https://multiplex.com.ar/';
     const locationsMap = new Map<string, Map<string, ScrapedMovieItem>>();
@@ -49,8 +49,9 @@ export class MultiplexService implements ICinemaScraper {
     }
 
     try {
-      const { data } = await withHttpRetry(() =>
-        axios.get<string>(url, { timeout: 15000 }),
+      const { data } = await withHttpRetry(
+        () => axios.get<string>(url, { timeout: 15000, signal }),
+        { signal },
       );
       if (typeof data !== 'string' || !data.toLowerCase().includes('<html')) {
         throw new Error('Respuesta HTML inválida en Multiplex');

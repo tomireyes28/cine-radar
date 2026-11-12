@@ -40,7 +40,7 @@ export class CinemarkService implements ICinemaScraper {
 
   constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log(
       'Iniciando recolección en Cinemark (HTTP BFF JSON API - 0 MB Chrome)...',
     );
@@ -48,13 +48,16 @@ export class CinemarkService implements ICinemaScraper {
     const chainErrors: string[] = [];
 
     try {
-      const { data: theatersResponse } = await withHttpRetry(() =>
-        axios.get<{
-          data?: CinemarkBffTheater[];
-        }>(`${this.bffBaseUrl}/cinema/theaters`, {
-          headers: { country: 'AR' },
-          timeout: 12000,
-        }),
+      const { data: theatersResponse } = await withHttpRetry(
+        () =>
+          axios.get<{
+            data?: CinemarkBffTheater[];
+          }>(`${this.bffBaseUrl}/cinema/theaters`, {
+            headers: { country: 'AR' },
+            timeout: 12000,
+            signal,
+          }),
+        { signal },
       );
 
       if (!Array.isArray(theatersResponse?.data)) {
@@ -98,14 +101,17 @@ export class CinemarkService implements ICinemaScraper {
         }
 
         try {
-          const { data: showtimesResponse } = await withHttpRetry(() =>
-            axios.get<{
-              data?: CinemarkBffShowtime[];
-            }>(`${this.bffBaseUrl}/cinema/showtimes`, {
-              params: { theater: theaterId },
-              headers: { country: 'AR' },
-              timeout: 12000,
-            }),
+          const { data: showtimesResponse } = await withHttpRetry(
+            () =>
+              axios.get<{
+                data?: CinemarkBffShowtime[];
+              }>(`${this.bffBaseUrl}/cinema/showtimes`, {
+                params: { theater: theaterId },
+                headers: { country: 'AR' },
+                timeout: 12000,
+                signal,
+              }),
+            { signal },
           );
 
           if (!Array.isArray(showtimesResponse?.data)) {

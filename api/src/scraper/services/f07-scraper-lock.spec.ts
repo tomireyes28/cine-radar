@@ -67,10 +67,32 @@ function createInMemoryLockPrisma(nowFn: () => number): {
       (strings: TemplateStringsArray, ...values: unknown[]) => {
         const sql = strings.join('?');
         const now = nowFn();
+        if (sql.includes("LIKE 'scraper:chain:%'")) {
+          return Promise.resolve(
+            [...locks.values()].filter(
+              (row) =>
+                row.lockKey.startsWith('scraper:chain:') && row.expiresAt > now,
+            ),
+          );
+        }
+        if (sql.includes('"lockKey" = \'scraper:global\'')) {
+          const row = locks.get('scraper:global');
+          const busy =
+            row &&
+            row.expiresAt > now &&
+            (sql.includes('IS DISTINCT FROM')
+              ? row.ownerId !== values[0]
+              : row.ownerId === values[0]);
+          return Promise.resolve(busy ? [{ lockKey: row.lockKey }] : []);
+        }
         if (sql.includes('SELECT "lockKey"')) {
           const lockKey = String(values[0]);
           const existing = locks.get(lockKey);
-          if (existing && existing.expiresAt >= now) {
+          if (
+            existing &&
+            existing.expiresAt >= now &&
+            (!sql.includes('FOR UPDATE') || existing.ownerId === values[1])
+          ) {
             return Promise.resolve([{ lockKey }]);
           }
         }
@@ -85,9 +107,7 @@ function createInMemoryLockPrisma(nowFn: () => number): {
     },
     cinemaLocation: {
       findMany: jest.fn().mockResolvedValue([]),
-      create: jest
-        .fn()
-        .mockResolvedValue({ id: 99, name: 'Sede', chainId: 1 }),
+      create: jest.fn().mockResolvedValue({ id: 99, name: 'Sede', chainId: 1 }),
     },
     $transaction: jest.fn(<T>(cb: (tx: unknown) => Promise<T>) => cb(prisma)),
   } as unknown as PrismaService;
@@ -157,7 +177,11 @@ describe('Distributed Scraper Locks, Contention & HTTP Gate (F07)', () => {
           status: 'failed' as const,
           expectedLocations: 1,
           locations: [
-            { locationName: 'Showcase Belgrano', status: 'failed' as const, movies: [] },
+            {
+              locationName: 'Showcase Belgrano',
+              status: 'failed' as const,
+              movies: [],
+            },
           ],
           errors: ['test'],
         };
@@ -178,8 +202,7 @@ describe('Distributed Scraper Locks, Contention & HTTP Gate (F07)', () => {
 
     const run1Promise = orchestrator.runByChainKey('showcase');
     // Allow run1 to acquire the lock and reach firstScrapeBarrier
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(locks.has('scraper:chain:showcase')).toBe(true);
 
@@ -215,7 +238,9 @@ describe('Distributed Scraper Locks, Contention & HTTP Gate (F07)', () => {
           chainName: 'Atlas Cines',
           status: 'failed' as const,
           expectedLocations: 1,
-          locations: [{ locationName: 'Atlas', status: 'failed' as const, movies: [] }],
+          locations: [
+            { locationName: 'Atlas', status: 'failed' as const, movies: [] },
+          ],
           errors: ['test'],
         };
       }),
@@ -234,9 +259,7 @@ describe('Distributed Scraper Locks, Contention & HTTP Gate (F07)', () => {
     );
 
     const globalRun = orchestrator.runAll();
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Second runAll is rejected with ConflictException
     await expect(orchestrator.runAll()).rejects.toBeInstanceOf(
@@ -261,12 +284,17 @@ describe('Distributed Scraper Locks, Contention & HTTP Gate (F07)', () => {
     const { prisma } = createInMemoryLockPrisma(() => simulatedNow);
     const lockService = new ScraperLockService(prisma);
 
-    const crashedOwner = await lockService.acquire('scraper:chain:cinepolis', 5000);
+    const crashedOwner = await lockService.acquire(
+      'scraper:chain:cinepolis',
+      5000,
+    );
     expect(crashedOwner).toBeTruthy();
 
     // Before TTL expires, another worker cannot acquire it
     simulatedNow += 4000;
-    expect(await lockService.acquire('scraper:chain:cinepolis', 5000)).toBeNull();
+    expect(
+      await lockService.acquire('scraper:chain:cinepolis', 5000),
+    ).toBeNull();
 
     // Once TTL expires (`expiresAt < now`), new worker atomically reclaims it
     simulatedNow += 2000;

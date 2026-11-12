@@ -28,7 +28,7 @@ export class CinemaCenterService implements ICinemaScraper {
 
   constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log(
       'Iniciando recolección en Cinema Center (HTTP + AJAX - 0 MB Chrome)...',
     );
@@ -37,16 +37,19 @@ export class CinemaCenterService implements ICinemaScraper {
 
     for (const city of CINEMACENTER_CITIES) {
       try {
-        const { data: rawBuffer } = await withHttpRetry(() =>
-          axios.get<ArrayBuffer>('https://www.cinemacenter.com.ar/horarios', {
-            responseType: 'arraybuffer',
-            headers: {
-              Cookie: `cityid=${city.cityId}`,
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            },
-            timeout: 12000,
-          }),
+        const { data: rawBuffer } = await withHttpRetry(
+          () =>
+            axios.get<ArrayBuffer>('https://www.cinemacenter.com.ar/horarios', {
+              responseType: 'arraybuffer',
+              headers: {
+                Cookie: `cityid=${city.cityId}`,
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              },
+              timeout: 12000,
+              signal,
+            }),
+          { signal },
         );
 
         const horariosHtml = new TextDecoder('iso-8859-1').decode(rawBuffer);
@@ -109,17 +112,20 @@ export class CinemaCenterService implements ICinemaScraper {
               cinemaId: item.cinemaId,
             });
 
-            const { data: ajaxHtml } = await withHttpRetry(() =>
-              axios.post<string>(
-                'https://www.cinemacenter.com.ar/modules/parts/ajax_horariosShow.php',
-                body.toString(),
-                {
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
+            const { data: ajaxHtml } = await withHttpRetry(
+              () =>
+                axios.post<string>(
+                  'https://www.cinemacenter.com.ar/modules/parts/ajax_horariosShow.php',
+                  body.toString(),
+                  {
+                    headers: {
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    timeout: 10000,
+                    signal,
                   },
-                  timeout: 10000,
-                },
-              ),
+                ),
+              { signal },
             );
 
             const $ajax = cheerio.load(ajaxHtml);

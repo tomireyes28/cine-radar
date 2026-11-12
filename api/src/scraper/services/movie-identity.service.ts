@@ -1,3 +1,4 @@
+import { WriteFence } from './scraper-lease';
 import { Prisma } from '@prisma/client';
 import { extractReleaseYearHint } from '../../common/utils/title-normalizer.util';
 import { Injectable, Logger } from '@nestjs/common';
@@ -44,6 +45,7 @@ export class MovieIdentityService {
       provider: string;
       sourceMovieId?: string;
       originalTitle?: string;
+      writeFence?: WriteFence;
     },
   ): Promise<number | null> {
     const originalTitle = context?.originalTitle ?? rawTitle;
@@ -98,6 +100,7 @@ export class MovieIdentityService {
       try {
         const result = await this.prisma.$transaction(
           async (tx) => {
+            await context?.writeFence?.(tx);
             // Transaction-scoped locks survive pooling and release on commit/rollback.
             for (const key of lockKeys)
               await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
@@ -109,6 +112,7 @@ export class MovieIdentityService {
                   create: { key: normalizedKey, movieId: id, originalTitle },
                   update: { movieId: id, originalTitle },
                 });
+              await context?.writeFence?.(tx);
               return { id, mergedFrom };
             };
             if (existing?.tmdbId != null) return remember(existing.id);

@@ -35,7 +35,7 @@ export class AtlasService implements ICinemaScraper {
 
   constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log('Iniciando recolección en Atlas Cines (HTTP JSON API)...');
     const locationsResult: ScrapedLocationResult[] = [];
     const chainErrors: string[] = [];
@@ -43,10 +43,13 @@ export class AtlasService implements ICinemaScraper {
     for (const location of ATLAS_LOCATIONS) {
       try {
         const url = `https://www.atlascines.com/Funciones/GetPeliculasPorComplejo?codComplejo=${location.complexId}`;
-        const { data } = await withHttpRetry(() =>
-          axios.get<unknown>(url, {
-            timeout: 10000,
-          }),
+        const { data } = await withHttpRetry(
+          () =>
+            axios.get<unknown>(url, {
+              timeout: 10000,
+              signal,
+            }),
+          { signal },
         );
 
         if (!Array.isArray(data)) {

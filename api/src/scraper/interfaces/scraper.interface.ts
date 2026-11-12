@@ -37,7 +37,7 @@ export interface ScrapedChainResult {
 export interface ICinemaScraper {
   readonly chainKey: string;
   readonly chainName: string;
-  scrape(): Promise<ScrapedChainResult>;
+  scrape(signal?: AbortSignal): Promise<ScrapedChainResult>;
 }
 
 /**

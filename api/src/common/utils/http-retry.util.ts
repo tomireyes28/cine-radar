@@ -1,4 +1,5 @@
 export interface HttpRetryOptions {
+  signal?: AbortSignal;
   maxRetries?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
@@ -24,8 +25,20 @@ const RETRYABLE_NETWORK_CODES = new Set([
   'ERR_NETWORK',
 ]);
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
+    }, ms);
+    const cancel = () => {
+      clearTimeout(timer);
+      const reason: unknown = signal?.reason;
+      reject(reason instanceof Error ? reason : new Error('Request aborted'));
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
 }
 
 /**
@@ -88,8 +101,7 @@ function computeRetryDelayMs(
   randomFn: () => number,
 ): number {
   const headers = (error as HttpErrorLike | null)?.response?.headers;
-  const retryAfterHeader =
-    headers?.['retry-after'] ?? headers?.['Retry-After'];
+  const retryAfterHeader = headers?.['retry-after'] ?? headers?.['Retry-After'];
   const retryAfterMs = parseRetryAfterMs(retryAfterHeader);
 
   if (retryAfterMs !== null) {
@@ -114,14 +126,17 @@ export async function withHttpRetry<T>(
   const maxRetries = options.maxRetries ?? defaultRetries;
   const baseDelayMs = options.baseDelayMs ?? 400;
   const maxDelayMs = options.maxDelayMs ?? 8_000;
-  const sleepFn = options.sleepFn ?? defaultSleep;
+  const sleepFn =
+    options.sleepFn ?? ((ms: number) => defaultSleep(ms, options.signal));
   const randomFn = options.randomFn ?? Math.random;
 
   let attempt = 0;
   while (true) {
+    options.signal?.throwIfAborted();
     try {
       return await operation();
     } catch (error: unknown) {
+      options.signal?.throwIfAborted();
       if (attempt >= maxRetries || !isRetryableHttpError(error)) {
         throw error;
       }

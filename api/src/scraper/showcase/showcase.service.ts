@@ -46,7 +46,7 @@ export class ShowcaseService implements ICinemaScraper {
 
   constructor(private readonly normalizer: TitleNormalizerService) {}
 
-  async scrape(): Promise<ScrapedChainResult> {
+  async scrape(signal?: AbortSignal): Promise<ScrapedChainResult> {
     this.logger.log(
       'Iniciando recolección en Showcase (HTTP JSON API VoyAlCine - 0 MB Chrome)...',
     );
@@ -62,10 +62,13 @@ export class ShowcaseService implements ICinemaScraper {
     const chainErrors: string[] = [];
 
     try {
-      const { data: homeHtml } = await withHttpRetry(() =>
-        axios.get<string>('https://entradas.todoshowcase.com/', {
-          timeout: 15000,
-        }),
+      const { data: homeHtml } = await withHttpRetry(
+        () =>
+          axios.get<string>('https://entradas.todoshowcase.com/', {
+            timeout: 15000,
+            signal,
+          }),
+        { signal },
       );
 
       if (typeof homeHtml !== 'string') {
@@ -92,11 +95,13 @@ export class ShowcaseService implements ICinemaScraper {
 
       for (const filmId of filmIds) {
         try {
-          const { data: tree } = await withHttpRetry(() =>
-            axios.get<VoyAlCineFilmTree>(
-              `https://api.voyalcine.net/films/${filmId}/tree/showcase`,
-              { timeout: 10000 },
-            ),
+          const { data: tree } = await withHttpRetry(
+            () =>
+              axios.get<VoyAlCineFilmTree>(
+                `https://api.voyalcine.net/films/${filmId}/tree/showcase`,
+                { timeout: 10000, signal },
+              ),
+            { signal },
           );
 
           if (

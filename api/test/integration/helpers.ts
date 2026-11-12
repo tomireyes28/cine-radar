@@ -63,6 +63,27 @@ export function strategy(data: ScrapedChainResult): ICinemaScraper {
   };
 }
 
+export function globalOrchestrator(
+  db: PrismaService,
+  identity: MovieIdentityService,
+  providers: ICinemaScraper[],
+  lock: ScraperLockService,
+): ScraperOrchestratorService {
+  if (providers.length !== 6)
+    throw new Error('Expected all six provider strategies');
+  return new ScraperOrchestratorService(
+    db,
+    identity,
+    providers[0] as AtlasService,
+    providers[1] as MultiplexService,
+    providers[2] as ShowcaseService,
+    providers[3] as CinemaCenterService,
+    providers[4] as CinemarkService,
+    providers[5] as CinepolisService,
+    lock,
+  );
+}
+
 export function barrier(participants: number): () => Promise<void> {
   let count = 0;
   let release!: () => void;

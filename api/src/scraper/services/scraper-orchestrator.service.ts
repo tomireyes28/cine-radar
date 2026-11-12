@@ -1,3 +1,4 @@
+import { fencedTransaction, ScraperLease, WriteFence } from './scraper-lease';
 import { enforceVerifiedCoverage } from './coverage-policy.util';
 import {
   ConflictException,
@@ -123,33 +124,84 @@ export class ScraperOrchestratorService {
       );
       if (!globalOwner) {
         throw new ConflictException(
-          'Ya existe una ejecución global de scraping en curso.',
+          'An incompatible scraping execution is already active.',
         );
       }
     }
 
+    const globalLease =
+      this.scraperLock && globalOwner
+        ? this.scraperLock.watch(
+            GLOBAL_SCRAPER_LOCK_KEY,
+            globalOwner,
+            DEFAULT_GLOBAL_LOCK_TTL_MS,
+          )
+        : undefined;
     try {
-      this.logger.log('Iniciando orquestación completa de cartelera...');
+      const run = async () => {
+        this.logger.log('Iniciando orquestación completa de cartelera...');
 
-      const deletedOld = await this.cleanupOldShowtimes();
-      const summaries: OrchestratorChainSummary[] = [];
+        const deletedOld = await this.cleanupOldShowtimes(globalLease?.guard);
+        const summaries: OrchestratorChainSummary[] = [];
 
-      // Shared movie DB ID cache across all chains during a run
-      const resolvedMovieDbIds = new Map<string, number | null>();
+        // Shared movie DB ID cache across all chains during a run
+        const resolvedMovieDbIds = new Map<string, number | null>();
 
-      for (const strategy of this.strategies) {
-        const chainStart = Date.now();
-        const chainLockKey = buildChainLockKey(strategy.chainKey);
-        let chainOwner: string | null = null;
+        for (const strategy of this.strategies) {
+          globalLease?.assertActive();
+          const chainStart = Date.now();
+          const chainLockKey = buildChainLockKey(strategy.chainKey);
+          let chainOwner: string | null = null;
+          let chainLease: ScraperLease | undefined;
 
-        if (this.scraperLock) {
-          chainOwner = await this.scraperLock.acquire(
-            chainLockKey,
-            DEFAULT_CHAIN_LOCK_TTL_MS,
-          );
-          if (!chainOwner) {
-            const lockMsg = `Ejecución omitida: bloqueo activo en ${chainLockKey}`;
-            this.logger.warn(`[${strategy.chainName}] ${lockMsg}`);
+          if (this.scraperLock) {
+            chainOwner = await this.scraperLock.acquire(
+              chainLockKey,
+              DEFAULT_CHAIN_LOCK_TTL_MS,
+              globalOwner ?? undefined,
+            );
+            if (!chainOwner) {
+              const lockMsg = `Ejecución omitida: bloqueo activo en ${chainLockKey}`;
+              this.logger.warn(`[${strategy.chainName}] ${lockMsg}`);
+              summaries.push({
+                chainKey: strategy.chainKey,
+                chainName: strategy.chainName,
+                status: 'failed',
+                expectedLocations: 0,
+                locationsComplete: 0,
+                locationsEmptyVerified: 0,
+                locationsPartial: 0,
+                locationsFailed: 0,
+                locationsProcessed: 0,
+                moviesResolved: 0,
+                showtimesInserted: 0,
+                discardedShowtimes: 0,
+                durationMs: Date.now() - chainStart,
+                errors: [lockMsg],
+              });
+              continue;
+            }
+          }
+
+          if (this.scraperLock && chainOwner)
+            chainLease = this.scraperLock.watch(
+              chainLockKey,
+              chainOwner,
+              DEFAULT_CHAIN_LOCK_TTL_MS,
+              globalLease,
+            );
+          try {
+            const execute = () =>
+              this.executeStrategy(strategy, resolvedMovieDbIds, chainLease);
+            const summary = chainLease
+              ? await chainLease.run(execute)
+              : await execute();
+            summaries.push(summary);
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : String(error);
+            this.logger.error(
+              `Fallo no controlado ejecutando estrategia ${strategy.chainName}: ${msg}`,
+            );
             summaries.push({
               chainKey: strategy.chainKey,
               chainName: strategy.chainName,
@@ -164,124 +216,100 @@ export class ScraperOrchestratorService {
               showtimesInserted: 0,
               discardedShowtimes: 0,
               durationMs: Date.now() - chainStart,
-              errors: [lockMsg],
+              errors: [msg],
             });
-            continue;
+          } finally {
+            await chainLease?.close();
+            if (this.scraperLock && chainOwner) {
+              await this.scraperLock.release(chainLockKey, chainOwner);
+            }
           }
         }
 
-        try {
-          const summary = await this.executeStrategy(
-            strategy,
-            resolvedMovieDbIds,
-          );
-          summaries.push(summary);
-        } catch (error: unknown) {
-          const msg = error instanceof Error ? error.message : String(error);
-          this.logger.error(
-            `Fallo no controlado ejecutando estrategia ${strategy.chainName}: ${msg}`,
-          );
-          summaries.push({
-            chainKey: strategy.chainKey,
-            chainName: strategy.chainName,
-            status: 'failed',
-            expectedLocations: 0,
-            locationsComplete: 0,
-            locationsEmptyVerified: 0,
-            locationsPartial: 0,
-            locationsFailed: 0,
-            locationsProcessed: 0,
-            moviesResolved: 0,
-            showtimesInserted: 0,
-            discardedShowtimes: 0,
-            durationMs: Date.now() - chainStart,
-            errors: [msg],
-          });
-        } finally {
-          if (this.scraperLock && chainOwner) {
-            await this.scraperLock.release(chainLockKey, chainOwner);
-          }
+        const totalShowtimes = summaries.reduce(
+          (acc, s) => acc + s.showtimesInserted,
+          0,
+        );
+        const failedChains = summaries
+          .filter((s) => s.status === 'failed')
+          .map((s) => s.chainKey);
+        const partialChains = summaries
+          .filter((s) => s.status === 'partial')
+          .map((s) => s.chainKey);
+
+        let overallStatus: 'ok' | 'degraded' | 'failed' = 'ok';
+        if (
+          summaries.length === 0 ||
+          failedChains.length === summaries.length ||
+          summaries.every(
+            (s) =>
+              s.locationsComplete +
+                s.locationsEmptyVerified +
+                s.locationsPartial ===
+              0,
+          )
+        ) {
+          overallStatus = 'failed';
+        } else if (failedChains.length > 0 || partialChains.length > 0) {
+          overallStatus = 'degraded';
         }
-      }
 
-      const totalShowtimes = summaries.reduce(
-        (acc, s) => acc + s.showtimesInserted,
-        0,
-      );
-      const failedChains = summaries
-        .filter((s) => s.status === 'failed')
-        .map((s) => s.chainKey);
-      const partialChains = summaries
-        .filter((s) => s.status === 'partial')
-        .map((s) => s.chainKey);
+        const completedAt = new Date();
+        const durationMs = completedAt.getTime() - startTime;
+        const runSummary: OrchestratorRunSummary = {
+          status: overallStatus,
+          completedAt: completedAt.toISOString(),
+          deletedExpiredShowtimes: deletedOld,
+          totalShowtimesInserted: totalShowtimes,
+          failedChains,
+          partialChains,
+          chains: summaries,
+        };
 
-      let overallStatus: 'ok' | 'degraded' | 'failed' = 'ok';
-      if (
-        summaries.length === 0 ||
-        failedChains.length === summaries.length ||
-        summaries.every(
-          (s) =>
-            s.locationsComplete +
-              s.locationsEmptyVerified +
-              s.locationsPartial ===
-            0,
-        )
-      ) {
-        overallStatus = 'failed';
-      } else if (failedChains.length > 0 || partialChains.length > 0) {
-        overallStatus = 'degraded';
-      }
+        await this.recordScrapeRun(
+          {
+            trigger,
+            scope: 'all',
+            status: overallStatus,
+            startedAt,
+            completedAt,
+            durationMs,
+            expectedLocations: summaries.reduce(
+              (acc, s) => acc + s.expectedLocations,
+              0,
+            ),
+            locationsSucceeded: summaries.reduce(
+              (acc, s) =>
+                acc +
+                s.locationsComplete +
+                s.locationsEmptyVerified +
+                s.locationsPartial,
+              0,
+            ),
+            locationsFailed: summaries.reduce(
+              (acc, s) => acc + s.locationsFailed,
+              0,
+            ),
+            showtimesInserted: totalShowtimes,
+            showtimesUnchanged: summaries.reduce(
+              (acc, s) => acc + (s.showtimesUnchanged ?? 0),
+              0,
+            ),
+            failedChains,
+            summaryJson: runSummary,
+          },
+          globalLease?.guard,
+        );
 
-      const completedAt = new Date();
-      const durationMs = completedAt.getTime() - startTime;
-      const runSummary: OrchestratorRunSummary = {
-        status: overallStatus,
-        completedAt: completedAt.toISOString(),
-        deletedExpiredShowtimes: deletedOld,
-        totalShowtimesInserted: totalShowtimes,
-        failedChains,
-        partialChains,
-        chains: summaries,
+        this.logger.log(
+          `Orquestación finalizada (${overallStatus}) en ${(durationMs / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
+        );
+
+        return runSummary;
       };
-
-      await this.recordScrapeRun({
-        trigger,
-        scope: 'all',
-        status: overallStatus,
-        startedAt,
-        completedAt,
-        durationMs,
-        expectedLocations: summaries.reduce(
-          (acc, s) => acc + s.expectedLocations,
-          0,
-        ),
-        locationsSucceeded: summaries.reduce(
-          (acc, s) =>
-            acc +
-            s.locationsComplete +
-            s.locationsEmptyVerified +
-            s.locationsPartial,
-          0,
-        ),
-        locationsFailed: summaries.reduce(
-          (acc, s) => acc + s.locationsFailed,
-          0,
-        ),
-        showtimesInserted: totalShowtimes,
-        showtimesUnchanged: summaries.reduce(
-          (acc, s) => acc + (s.showtimesUnchanged ?? 0),
-          0,
-        ),
-        failedChains,
-        summaryJson: runSummary,
-      });
-
-      this.logger.log(
-        `Orquestación finalizada (${overallStatus}) en ${(durationMs / 1000).toFixed(1)}s. Funciones insertadas: ${totalShowtimes}. Fallidas: [${failedChains.join(', ')}]`,
-      );
-
-      return runSummary;
+      return globalLease ? await globalLease.run(run) : await run();
     } finally {
+      await globalLease?.close();
       if (this.scraperLock && globalOwner) {
         await this.scraperLock.release(GLOBAL_SCRAPER_LOCK_KEY, globalOwner);
       }
@@ -323,35 +351,50 @@ export class ScraperOrchestratorService {
       }
     }
 
+    const chainLease =
+      this.scraperLock && chainOwner
+        ? this.scraperLock.watch(
+            chainLockKey,
+            chainOwner,
+            DEFAULT_CHAIN_LOCK_TTL_MS,
+          )
+        : undefined;
     const resolvedMovieDbIds = new Map<string, number | null>();
     const chainStart = Date.now();
     const startedAt = new Date(chainStart);
     try {
-      const summary = await this.executeStrategy(strategy, resolvedMovieDbIds);
+      const execute = () =>
+        this.executeStrategy(strategy, resolvedMovieDbIds, chainLease);
+      const summary = chainLease
+        ? await chainLease.run(execute)
+        : await execute();
       const completedAt = new Date();
-      await this.recordScrapeRun({
-        trigger,
-        scope: strategy.chainKey,
-        status:
-          summary.status === 'failed'
-            ? 'failed'
-            : summary.status === 'partial'
-              ? 'degraded'
-              : 'ok',
-        startedAt,
-        completedAt,
-        durationMs: summary.durationMs,
-        expectedLocations: summary.expectedLocations,
-        locationsSucceeded:
-          summary.locationsComplete +
-          summary.locationsEmptyVerified +
-          summary.locationsPartial,
-        locationsFailed: summary.locationsFailed,
-        showtimesInserted: summary.showtimesInserted,
-        showtimesUnchanged: summary.showtimesUnchanged ?? 0,
-        failedChains: summary.status === 'failed' ? [strategy.chainKey] : [],
-        summaryJson: summary,
-      });
+      await this.recordScrapeRun(
+        {
+          trigger,
+          scope: strategy.chainKey,
+          status:
+            summary.status === 'failed'
+              ? 'failed'
+              : summary.status === 'partial'
+                ? 'degraded'
+                : 'ok',
+          startedAt,
+          completedAt,
+          durationMs: summary.durationMs,
+          expectedLocations: summary.expectedLocations,
+          locationsSucceeded:
+            summary.locationsComplete +
+            summary.locationsEmptyVerified +
+            summary.locationsPartial,
+          locationsFailed: summary.locationsFailed,
+          showtimesInserted: summary.showtimesInserted,
+          showtimesUnchanged: summary.showtimesUnchanged ?? 0,
+          failedChains: summary.status === 'failed' ? [strategy.chainKey] : [],
+          summaryJson: summary,
+        },
+        chainLease?.guard,
+      );
       return summary;
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -374,44 +417,51 @@ export class ScraperOrchestratorService {
         durationMs: Date.now() - chainStart,
         errors: [msg],
       };
-      await this.recordScrapeRun({
-        trigger,
-        scope: strategy.chainKey,
-        status: 'failed',
-        startedAt,
-        completedAt: new Date(),
-        durationMs: failedSummary.durationMs,
-        expectedLocations: 0,
-        locationsSucceeded: 0,
-        locationsFailed: 0,
-        showtimesInserted: 0,
-        showtimesUnchanged: 0,
-        failedChains: [strategy.chainKey],
-        summaryJson: failedSummary,
-      });
+      await this.recordScrapeRun(
+        {
+          trigger,
+          scope: strategy.chainKey,
+          status: 'failed',
+          startedAt,
+          completedAt: new Date(),
+          durationMs: failedSummary.durationMs,
+          expectedLocations: 0,
+          locationsSucceeded: 0,
+          locationsFailed: 0,
+          showtimesInserted: 0,
+          showtimesUnchanged: 0,
+          failedChains: [strategy.chainKey],
+          summaryJson: failedSummary,
+        },
+        chainLease?.guard,
+      );
       return failedSummary;
     } finally {
+      await chainLease?.close();
       if (this.scraperLock && chainOwner) {
         await this.scraperLock.release(chainLockKey, chainOwner);
       }
     }
   }
 
-  private async recordScrapeRun(entry: {
-    trigger: ScrapeTrigger;
-    scope: string;
-    status: 'ok' | 'degraded' | 'failed';
-    startedAt: Date;
-    completedAt: Date;
-    durationMs: number;
-    expectedLocations: number;
-    locationsSucceeded: number;
-    locationsFailed: number;
-    showtimesInserted: number;
-    showtimesUnchanged: number;
-    failedChains: string[];
-    summaryJson: unknown;
-  }): Promise<void> {
+  private async recordScrapeRun(
+    entry: {
+      trigger: ScrapeTrigger;
+      scope: string;
+      status: 'ok' | 'degraded' | 'failed';
+      startedAt: Date;
+      completedAt: Date;
+      durationMs: number;
+      expectedLocations: number;
+      locationsSucceeded: number;
+      locationsFailed: number;
+      showtimesInserted: number;
+      showtimesUnchanged: number;
+      failedChains: string[];
+      summaryJson: unknown;
+    },
+    fence?: WriteFence,
+  ): Promise<void> {
     const maybeCreate = (this.prisma as { scrapeRun?: { create?: unknown } })
       .scrapeRun?.create;
     if (typeof maybeCreate !== 'function') {
@@ -419,25 +469,28 @@ export class ScraperOrchestratorService {
     }
 
     try {
-      await this.prisma.scrapeRun.create({
-        data: {
-          trigger: entry.trigger,
-          scope: entry.scope,
-          status: entry.status,
-          startedAt: entry.startedAt,
-          completedAt: entry.completedAt,
-          durationMs: entry.durationMs,
-          expectedLocations: entry.expectedLocations,
-          locationsSucceeded: entry.locationsSucceeded,
-          locationsFailed: entry.locationsFailed,
-          showtimesInserted: entry.showtimesInserted,
-          showtimesUnchanged: entry.showtimesUnchanged,
-          failedChains: entry.failedChains,
-          summaryJson: JSON.parse(
-            JSON.stringify(entry.summaryJson),
-          ) as Prisma.InputJsonValue,
-        },
-      });
+      const create = (tx: Prisma.TransactionClient) =>
+        tx.scrapeRun.create({
+          data: {
+            trigger: entry.trigger,
+            scope: entry.scope,
+            status: entry.status,
+            startedAt: entry.startedAt,
+            completedAt: entry.completedAt,
+            durationMs: entry.durationMs,
+            expectedLocations: entry.expectedLocations,
+            locationsSucceeded: entry.locationsSucceeded,
+            locationsFailed: entry.locationsFailed,
+            showtimesInserted: entry.showtimesInserted,
+            showtimesUnchanged: entry.showtimesUnchanged,
+            failedChains: entry.failedChains,
+            summaryJson: JSON.parse(
+              JSON.stringify(entry.summaryJson),
+            ) as Prisma.InputJsonValue,
+          },
+        });
+      if (fence) await fencedTransaction(this.prisma, fence, create);
+      else await create(this.prisma);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(
@@ -449,14 +502,18 @@ export class ScraperOrchestratorService {
   private async executeStrategy(
     strategy: ICinemaScraper,
     resolvedMovieDbIds: Map<string, number | null>,
+    lease?: ScraperLease,
   ): Promise<OrchestratorChainSummary> {
+    lease?.assertActive();
     const start = Date.now();
-    const scrapedData = await strategy.scrape();
+    const scrapedData = await strategy.scrape(lease?.signal);
+    lease?.assertActive();
     return this.persistChainData(
       strategy.chainKey,
       scrapedData,
       resolvedMovieDbIds,
       start,
+      lease?.guard,
     );
   }
 
@@ -465,7 +522,10 @@ export class ScraperOrchestratorService {
     chainData: ScrapedChainResult,
     resolvedMovieDbIds: Map<string, number | null>,
     startTime: number,
+    fence?: WriteFence,
   ): Promise<OrchestratorChainSummary> {
+    const write = <T>(work: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      fence ? fencedTransaction(this.prisma, fence, work) : work(this.prisma);
     chainData = enforceVerifiedCoverage(chainData);
     let locationsComplete = 0;
     let locationsEmptyVerified = 0;
@@ -512,11 +572,13 @@ export class ScraperOrchestratorService {
       };
     }
 
-    const chain = await this.prisma.cinemaChain.upsert({
-      where: { name: chainData.chainName },
-      update: {},
-      create: { name: chainData.chainName },
-    });
+    const chain = await write((tx) =>
+      tx.cinemaChain.upsert({
+        where: { name: chainData.chainName },
+        update: {},
+        create: { name: chainData.chainName },
+      }),
+    );
 
     const existingLocations = await this.prisma.cinemaLocation.findMany({
       where: { chainId: chain.id },
@@ -547,15 +609,17 @@ export class ScraperOrchestratorService {
       try {
         let locationId = locationIdByName.get(locData.locationName);
         if (!locationId) {
-          const created = await this.prisma.cinemaLocation.create({
-            data: {
-              name: locData.locationName,
-              chainId: chain.id,
-              address: 'Ver ubicación',
-              lat: 0,
-              lng: 0,
-            },
-          });
+          const created = await write((tx) =>
+            tx.cinemaLocation.create({
+              data: {
+                name: locData.locationName,
+                chainId: chain.id,
+                address: 'Ver ubicación',
+                lat: 0,
+                lng: 0,
+              },
+            }),
+          );
           locationId = created.id;
           locationIdByName.set(locData.locationName, locationId);
         }
@@ -580,6 +644,7 @@ export class ScraperOrchestratorService {
               provider: chainKey,
               sourceMovieId: movieItem.sourceMovieId,
               originalTitle: movieItem.originalTitle,
+              writeFence: fence,
             },
           );
           if (!dbMovieId) {
@@ -612,7 +677,9 @@ export class ScraperOrchestratorService {
         const resolvedLocationId = locationId;
 
         if (locData.status === 'empty_verified') {
-          await this.prisma.$transaction(
+          await fencedTransaction(
+            this.prisma,
+            fence,
             async (tx) => {
               await tx.showtime.deleteMany({
                 where: {
@@ -634,7 +701,9 @@ export class ScraperOrchestratorService {
         if (locData.status === 'partial') {
           discardedShowtimes += venueDiscarded;
           if (showtimesBatch.length > 0) {
-            const created = await this.prisma.$transaction(
+            const created = await fencedTransaction(
+              this.prisma,
+              fence,
               async (tx) =>
                 tx.showtime.createMany({
                   data: showtimesBatch,
@@ -662,7 +731,9 @@ export class ScraperOrchestratorService {
 
             const windowEnd = locData.coveredUntil!;
 
-            const syncResult = await this.prisma.$transaction(
+            const syncResult = await fencedTransaction(
+              this.prisma,
+              fence,
               async (tx) => {
                 const existing = await tx.showtime.findMany({
                   where: {
@@ -803,15 +874,19 @@ export class ScraperOrchestratorService {
     };
   }
 
-  async cleanupOldShowtimes(): Promise<number> {
+  async cleanupOldShowtimes(fence?: WriteFence): Promise<number> {
     const yesterdayCutoff = getArgentinaStartOfYesterday();
 
-    const result = await this.prisma.showtime.deleteMany({
-      where: {
-        dateTime: { lt: yesterdayCutoff },
-      },
-    });
+    const cleanup = (tx: Prisma.TransactionClient) =>
+      tx.showtime.deleteMany({
+        where: {
+          dateTime: { lt: yesterdayCutoff },
+        },
+      });
 
+    const result = fence
+      ? await fencedTransaction(this.prisma, fence, cleanup)
+      : await cleanup(this.prisma);
     this.logger.log(
       `Limpieza completada: ${result.count} funciones antiguas eliminadas.`,
     );
