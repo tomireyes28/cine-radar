@@ -1,3 +1,4 @@
+import { validProviderTime } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { withHttpRetry } from '../../common/utils/http-retry.util';
@@ -132,24 +133,32 @@ export class CinemarkService implements ICinemaScraper {
 
           const moviesMap = new Map<string, ScrapedMovieItem>();
           let validSessionsCount = 0;
+          let invalidRecords = 0;
 
           for (const session of sessions) {
             if (
               typeof session?.movieName !== 'string' ||
               typeof session?.sessionDateTime !== 'string'
             ) {
+              invalidRecords++;
               continue;
             }
 
             const cleanTitle = this.normalizer.normalize(session.movieName);
-            if (!cleanTitle) continue;
+            if (!cleanTitle) {
+              invalidRecords++;
+              continue;
+            }
 
             const datePart =
               session.sessionDisplayDate ||
               session.sessionDateTime.slice(0, 10);
             const timePart = session.sessionDateTime.slice(11, 16);
             const dateTime = buildArgentinaDate(datePart, timePart);
-            if (isNaN(dateTime.getTime())) continue;
+            if (!validProviderTime(datePart, timePart)) {
+              invalidRecords++;
+              continue;
+            }
 
             if (!moviesMap.has(cleanTitle)) {
               moviesMap.set(cleanTitle, {
@@ -187,14 +196,19 @@ export class CinemarkService implements ICinemaScraper {
             continue;
           }
 
+          if (invalidRecords > 0)
+            chainErrors.push(`Registros inválidos: ${invalidRecords}`);
           locationsResult.push({
             locationName: locConfig.name,
-            status: 'complete',
+            status: invalidRecords > 0 ? 'partial' : 'complete',
+            errors:
+              invalidRecords > 0
+                ? [`Registros inválidos: ${invalidRecords}`]
+                : undefined,
             movies: Array.from(moviesMap.values()),
           });
         } catch (locErr: unknown) {
-          const msg =
-            locErr instanceof Error ? locErr.message : String(locErr);
+          const msg = locErr instanceof Error ? locErr.message : String(locErr);
           const fullErr = `Error en ${locConfig.name}: ${msg}`;
           this.logger.error(fullErr);
           chainErrors.push(fullErr);

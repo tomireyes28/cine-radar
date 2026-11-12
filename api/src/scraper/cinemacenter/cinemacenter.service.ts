@@ -1,3 +1,4 @@
+import { validProviderTime } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -93,7 +94,10 @@ export class CinemaCenterService implements ICinemaScraper {
 
         for (const item of movieLinks) {
           const cleanTitle = this.normalizer.normalize(item.rawTitle);
-          if (!cleanTitle) continue;
+          if (!cleanTitle) {
+            ajaxErrors.push('Título inválido');
+            continue;
+          }
 
           try {
             const body = new URLSearchParams({
@@ -119,16 +123,23 @@ export class CinemaCenterService implements ICinemaScraper {
             const format = this.normalizer.normalizeFormat(item.rawTitle);
             const language = this.normalizer.normalizeLanguage(item.rawTitle);
 
+            const beforeCount = validShowtimesCount;
             $ajax('li ul.hours li a').each((_, aEl) => {
               const href = $ajax(aEl).attr('href') || '';
               const matches = href.match(/'([^']+)'/g);
               if (matches && matches[4]) {
                 const isoRaw = matches[4].replace(/'/g, '').trim();
                 const [datePart, timePart] = isoRaw.split('T');
-                if (!datePart || !timePart) return;
+                if (!datePart || !timePart) {
+                  ajaxErrors.push('Fecha incompleta');
+                  return;
+                }
 
                 const dateTime = buildArgentinaDate(datePart, timePart);
-                if (isNaN(dateTime.getTime())) return;
+                if (!validProviderTime(datePart, timePart)) {
+                  ajaxErrors.push('Fecha inválida');
+                  return;
+                }
 
                 if (!moviesMap.has(cleanTitle)) {
                   moviesMap.set(cleanTitle, {
@@ -144,8 +155,12 @@ export class CinemaCenterService implements ICinemaScraper {
                   ticketUrl: 'https://www.cinemacenter.com.ar/horarios',
                 });
                 validShowtimesCount++;
+              } else {
+                ajaxErrors.push('Enlace de función inválido');
               }
             });
+            if (beforeCount === validShowtimesCount)
+              ajaxErrors.push(`Sin horarios verificables: ${item.showId}`);
           } catch (ajaxErr: unknown) {
             const msg =
               ajaxErr instanceof Error ? ajaxErr.message : String(ajaxErr);

@@ -1,3 +1,4 @@
+import { validCinepolisSchedule } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import { CINEPOLIS_LOCATIONS } from './cinepolis.locations';
 import {
@@ -176,10 +177,12 @@ export async function evaluateCinepolisBillboard(
 
   const movies = edges
     .map((e) => e?.node)
-    .filter(
-      (node): node is { id: string; name: string } =>
-        Boolean(node && node.id && node.name),
+    .filter((node): node is { id: string; name: string } =>
+      Boolean(node && node.id && node.name),
     );
+
+  if (movies.length !== edges.length)
+    throw new Error('GraphQL Movies contiene pel�culas inv�lidas');
 
   const schedules: CinepolisExtractedMovieSchedule[] = [];
   const failedMovies: CinepolisFailedMovie[] = [];
@@ -312,9 +315,9 @@ export class CinepolisService implements ICinemaScraper {
         timeout: 20_000,
       });
 
-      const allCinemasCsv = CINEPOLIS_LOCATIONS.map(
-        (l) => l.graphqlSlug,
-      ).join(',');
+      const allCinemasCsv = CINEPOLIS_LOCATIONS.map((l) => l.graphqlSlug).join(
+        ',',
+      );
 
       const evalResult = await page.evaluate(evaluateCinepolisBillboard, {
         cinemasCsv: allCinemasCsv,
@@ -343,9 +346,20 @@ export class CinepolisService implements ICinemaScraper {
 
       for (const item of evalResult.schedules) {
         const cleanTitle = this.normalizer.normalize(item.movieName);
-        if (!cleanTitle) continue;
+        if (!cleanTitle) {
+          hasPartialMovieFailures = true;
+          chainErrors.push('T�tulo inv�lido');
+          continue;
+        }
 
         for (const sched of item.schedules) {
+          if (!validCinepolisSchedule(sched)) {
+            hasPartialMovieFailures = true;
+            chainErrors.push(
+              `Estructura de horarios inv�lida: ${item.movieName}`,
+            );
+            continue;
+          }
           const locConfig = locationBySlug.get(sched.cinemaId);
           if (!locConfig) continue;
 

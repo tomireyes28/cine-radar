@@ -1,3 +1,4 @@
+import { validProviderTime } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { withHttpRetry } from '../../common/utils/http-retry.util';
@@ -73,6 +74,7 @@ export class AtlasService implements ICinemaScraper {
 
         const moviesMap = new Map<string, ScrapedMovieItem>();
         let validShowtimesCount = 0;
+        let invalidRecords = 0;
 
         for (const rawItem of data) {
           const item = rawItem as AtlasShowtimeItem;
@@ -85,15 +87,22 @@ export class AtlasService implements ICinemaScraper {
             typeof item.fecha !== 'string' ||
             typeof item.horaComienzo !== 'string'
           ) {
+            invalidRecords++;
             continue;
           }
 
           const normalizedKey = this.normalizer.normalize(rawTitle);
-          if (!normalizedKey) continue;
+          if (!normalizedKey) {
+            invalidRecords++;
+            continue;
+          }
 
           const datePart = item.fecha.split('T')[0];
           const dateTime = buildArgentinaDate(datePart, item.horaComienzo);
-          if (isNaN(dateTime.getTime())) continue;
+          if (!validProviderTime(datePart, item.horaComienzo)) {
+            invalidRecords++;
+            continue;
+          }
 
           if (!moviesMap.has(normalizedKey)) {
             moviesMap.set(normalizedKey, {
@@ -127,9 +136,15 @@ export class AtlasService implements ICinemaScraper {
           continue;
         }
 
+        if (invalidRecords > 0)
+          chainErrors.push(`Registros inválidos: ${invalidRecords}`);
         locationsResult.push({
           locationName: location.name,
-          status: 'complete',
+          status: invalidRecords > 0 ? 'partial' : 'complete',
+          errors:
+            invalidRecords > 0
+              ? [`Registros inválidos: ${invalidRecords}`]
+              : undefined,
           movies: Array.from(moviesMap.values()),
         });
       } catch (error: unknown) {

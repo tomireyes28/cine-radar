@@ -1,3 +1,4 @@
+import { validProviderTime } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -95,10 +96,32 @@ export class MultiplexService implements ICinemaScraper {
         }
 
         const cleanTitle = this.normalizer.normalize(rawTitle);
-        if (!cleanTitle) continue;
+        if (!cleanTitle) {
+          corruptItems++;
+          continue;
+        }
+
+        const validFunctions: RawMultiplexFunction[] = [];
+        for (const f of allFunctions) {
+          if (
+            !f ||
+            typeof f.complejo !== 'string' ||
+            typeof f.dia !== 'string' ||
+            typeof f.hora !== 'string'
+          ) {
+            corruptItems++;
+            continue;
+          }
+          const day = this.parseMultiplexDate(f.dia);
+          if (!day || !validProviderTime(day, f.hora)) {
+            corruptItems++;
+            continue;
+          }
+          validFunctions.push(f);
+        }
 
         for (const locConfig of MULTIPLEX_LOCATIONS) {
-          const matchingShows = allFunctions.filter(
+          const matchingShows = validFunctions.filter(
             (f) =>
               f &&
               f.complejo === locConfig.complexId &&

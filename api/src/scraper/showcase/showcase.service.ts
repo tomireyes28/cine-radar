@@ -1,3 +1,4 @@
+import { validShowcaseTree } from '../services/payload-integrity.util';
 import { Injectable, Logger } from '@nestjs/common';
 import axios from 'axios';
 import { withHttpRetry } from '../../common/utils/http-retry.util';
@@ -99,6 +100,7 @@ export class ShowcaseService implements ICinemaScraper {
           );
 
           if (
+            !validShowcaseTree(tree) ||
             !tree ||
             typeof tree.name !== 'string' ||
             !tree.days ||
