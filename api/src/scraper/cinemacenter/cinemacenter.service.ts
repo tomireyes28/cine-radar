@@ -80,10 +80,13 @@ export class CinemaCenterService implements ICinemaScraper {
         });
 
         if (movieLinks.length === 0) {
+          const error = `${city.name}: no se encontraron enlaces; no hay evidencia explícita de cartelera vacía`;
+          chainErrors.push(error);
           locationsResult.push({
             locationName: city.name,
-            status: 'empty_verified',
+            status: 'failed',
             movies: [],
+            errors: [error],
           });
           continue;
         }

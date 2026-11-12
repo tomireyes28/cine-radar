@@ -98,7 +98,10 @@ function createTransactionalStore(
                     continue;
                   }
                   const t = r.dateTime.getTime();
-                  if (where.dateTime?.lt && !(t < where.dateTime.lt.getTime())) {
+                  if (
+                    where.dateTime?.lt &&
+                    !(t < where.dateTime.lt.getTime())
+                  ) {
                     continue;
                   }
                   if (
@@ -229,6 +232,8 @@ describe('Atomic Venue Showtime Replacement (F01)', () => {
         locations: [
           {
             locationName: 'Showcase Belgrano',
+            coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+            coveredUntil: new Date('2026-11-10T23:59:59.999-03:00'),
             status: 'complete',
             movies: [
               {
@@ -317,6 +322,8 @@ describe('Atomic Venue Showtime Replacement (F01)', () => {
         locations: [
           {
             locationName: 'Showcase Belgrano',
+            coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+            coveredUntil: new Date('2026-11-10T23:59:59.999-03:00'),
             status: 'complete',
             movies: [
               {
@@ -334,6 +341,8 @@ describe('Atomic Venue Showtime Replacement (F01)', () => {
           },
           {
             locationName: 'Showcase Norcenter',
+            coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+            coveredUntil: new Date('2026-11-10T23:59:59.999-03:00'),
             status: 'complete',
             movies: [
               {

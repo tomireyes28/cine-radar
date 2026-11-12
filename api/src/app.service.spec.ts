@@ -146,6 +146,8 @@ describe('Observability, Health Readiness & Proxy Trust (M6)', () => {
           locations: [
             {
               locationName: 'Atlas Caballito',
+              coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+              coveredUntil: new Date('2026-11-08T23:59:59.999-03:00'),
               status: 'empty_verified',
               movies: [],
             },

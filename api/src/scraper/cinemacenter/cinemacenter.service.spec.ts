@@ -47,7 +47,7 @@ describe('CinemaCenterService Fixture Suite (F17)', () => {
 
     const result = await service.scrape();
 
-    expect(result.status).toBe('complete');
+    expect(result.status).toBe('partial');
     expect(result.expectedLocations).toBe(CINEMACENTER_CITIES.length);
 
     const altaGracia = result.locations.find(
@@ -68,7 +68,7 @@ describe('CinemaCenterService Fixture Suite (F17)', () => {
     const bahiaBlanca = result.locations.find(
       (l) => l.locationName === 'Cinema Center Bahía Blanca',
     );
-    expect(bahiaBlanca?.status).toBe('empty_verified');
+    expect(bahiaBlanca?.status).toBe('failed');
   });
 
   it('marks a venue partial when one of multiple AJAX movie showtime requests fails', async () => {
@@ -124,7 +124,9 @@ describe('CinemaCenterService Fixture Suite (F17)', () => {
 
   it('returns failed when /horarios HTML does not match Cinema Center signature', async () => {
     jest.spyOn(axios, 'get').mockResolvedValue({
-      data: encodeIso88591ArrayBuffer('<html><body>Cloudflare Challenge</body></html>'),
+      data: encodeIso88591ArrayBuffer(
+        '<html><body>Cloudflare Challenge</body></html>',
+      ),
     });
 
     const result = await service.scrape();

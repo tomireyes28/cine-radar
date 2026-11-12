@@ -1,3 +1,4 @@
+import { enforceVerifiedCoverage } from './coverage-policy.util';
 import {
   ConflictException,
   Injectable,
@@ -29,10 +30,8 @@ import { CinemaCenterService } from '../cinemacenter/cinemacenter.service';
 import { CinemarkService } from '../cinemark/cinemark.service';
 import { CinepolisService } from '../cinepolis/cinepolis.service';
 import {
-  getArgentinaDayRange,
   getArgentinaStartOfToday,
   getArgentinaStartOfYesterday,
-  getArgentinaTodayDateString,
 } from '../../common/utils/argentina-time.util';
 
 export interface OrchestratorChainSummary {
@@ -413,9 +412,8 @@ export class ScraperOrchestratorService {
     failedChains: string[];
     summaryJson: unknown;
   }): Promise<void> {
-    const maybeCreate = (
-      this.prisma as { scrapeRun?: { create?: unknown } }
-    ).scrapeRun?.create;
+    const maybeCreate = (this.prisma as { scrapeRun?: { create?: unknown } })
+      .scrapeRun?.create;
     if (typeof maybeCreate !== 'function') {
       return;
     }
@@ -468,6 +466,7 @@ export class ScraperOrchestratorService {
     resolvedMovieDbIds: Map<string, number | null>,
     startTime: number,
   ): Promise<OrchestratorChainSummary> {
+    chainData = enforceVerifiedCoverage(chainData);
     let locationsComplete = 0;
     let locationsEmptyVerified = 0;
     let locationsPartial = 0;
@@ -615,9 +614,7 @@ export class ScraperOrchestratorService {
                   locationId: resolvedLocationId,
                   dateTime: {
                     gte: windowStart,
-                    ...(locData.coveredUntil
-                      ? { lte: locData.coveredUntil }
-                      : {}),
+                    lte: locData.coveredUntil!,
                   },
                 },
               });
@@ -658,13 +655,7 @@ export class ScraperOrchestratorService {
             }
             const dedupedBatch = Array.from(incomingByKey.values());
 
-            const maxDateMs = dedupedBatch.reduce(
-              (max, item) => Math.max(max, item.dateTime.getTime()),
-              dedupedBatch[0].dateTime.getTime(),
-            );
-            const maxDateKey = getArgentinaTodayDateString(new Date(maxDateMs));
-            const windowEnd =
-              locData.coveredUntil ?? getArgentinaDayRange(maxDateKey).end;
+            const windowEnd = locData.coveredUntil!;
 
             const syncResult = await this.prisma.$transaction(
               async (tx) => {

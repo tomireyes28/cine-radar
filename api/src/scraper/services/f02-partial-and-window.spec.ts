@@ -72,7 +72,10 @@ function createShowtimeStore(initial: StoredShowtime[]): ShowtimeStoreMock {
           let count = 0;
           for (let i = rows.length - 1; i >= 0; i--) {
             const r = rows[i];
-            if (where.locationId !== undefined && r.locationId !== where.locationId) {
+            if (
+              where.locationId !== undefined &&
+              r.locationId !== where.locationId
+            ) {
               continue;
             }
             const t = r.dateTime.getTime();
@@ -144,7 +147,8 @@ describe('Partial Scrape Protection, Empty Venues & Horizon Scoping (F02)', () =
       dateTime: buildArgentinaDate('2026-11-08', '20:00'),
       format: '2D',
       language: 'SUBTITULADA',
-      ticketUrl: 'https://entradas.todoshowcase.com/showcase/pelicula.aspx?filmid=1',
+      ticketUrl:
+        'https://entradas.todoshowcase.com/showcase/pelicula.aspx?filmid=1',
     };
 
     const store = createShowtimeStore([existingFilm1Showtime]);
@@ -234,7 +238,8 @@ describe('Partial Scrape Protection, Empty Venues & Horizon Scoping (F02)', () =
       stubStrategy<CinepolisService>('cinepolis'),
     );
 
-    const failedSummary = await orchestratorUnverified.runByChainKey('multiplex');
+    const failedSummary =
+      await orchestratorUnverified.runByChainKey('multiplex');
     expect(failedSummary.status).toBe('failed');
     expect(storeUnverified.rows).toHaveLength(1);
 
@@ -251,6 +256,8 @@ describe('Partial Scrape Protection, Empty Venues & Horizon Scoping (F02)', () =
         locations: [
           {
             locationName: 'Showcase Belgrano',
+            coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+            coveredUntil: new Date('2026-11-10T23:59:59.999-03:00'),
             status: 'empty_verified',
             movies: [],
           },
@@ -307,6 +314,8 @@ describe('Partial Scrape Protection, Empty Venues & Horizon Scoping (F02)', () =
         locations: [
           {
             locationName: 'Showcase Belgrano',
+            coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+            coveredUntil: new Date('2026-11-10T23:59:59.999-03:00'),
             status: 'complete',
             movies: [
               {

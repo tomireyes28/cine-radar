@@ -244,6 +244,8 @@ describe('Performance, Bounded Caches, Differential Sync & Retry Suite (M1/M2/M3
         locations: [
           {
             locationName: 'Showcase Norcenter',
+              coveredFrom: new Date('2026-11-08T00:00:00-03:00'),
+              coveredUntil: new Date('2026-11-08T23:59:59.999-03:00'),
             status: 'complete',
             movies: [
               {
