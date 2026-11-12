@@ -28,7 +28,11 @@ interface ShowtimeStoreMock {
   rows: StoredShowtime[];
   cinemaChain: { upsert: jest.Mock };
   cinemaLocation: { findMany: jest.Mock; create: jest.Mock };
-  showtime: { deleteMany: jest.Mock; createMany: jest.Mock };
+  showtime: {
+    findMany: jest.Mock;
+    deleteMany: jest.Mock;
+    createMany: jest.Mock;
+  };
   $transaction: jest.Mock;
 }
 
@@ -60,11 +64,27 @@ function createShowtimeStore(initial: StoredShowtime[]): ShowtimeStoreMock {
       ),
     },
     showtime: {
+      findMany: jest.fn(
+        ({
+          where,
+        }: {
+          where: { locationId: number; dateTime: { gte: Date; lte: Date } };
+        }) =>
+          Promise.resolve(
+            rows.filter(
+              (row) =>
+                row.locationId === where.locationId &&
+                row.dateTime >= where.dateTime.gte &&
+                row.dateTime <= where.dateTime.lte,
+            ),
+          ),
+      ),
       deleteMany: jest.fn(
         ({
           where,
         }: {
           where: {
+            id?: { in: number[] };
             locationId?: number;
             dateTime?: { lt?: Date; gte?: Date; lte?: Date };
           };
@@ -72,6 +92,7 @@ function createShowtimeStore(initial: StoredShowtime[]): ShowtimeStoreMock {
           let count = 0;
           for (let i = rows.length - 1; i >= 0; i--) {
             const r = rows[i];
+            if (where.id && !where.id.in.includes(r.id)) continue;
             if (
               where.locationId !== undefined &&
               r.locationId !== where.locationId

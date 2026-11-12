@@ -664,71 +664,7 @@ export class ScraperOrchestratorService {
 
             const syncResult = await this.prisma.$transaction(
               async (tx) => {
-                const maybeFindMany = (tx.showtime as { findMany?: unknown })
-                  .findMany;
-
-                if (typeof maybeFindMany === 'function') {
-                  const existing = await tx.showtime.findMany({
-                    where: {
-                      locationId: resolvedLocationId,
-                      dateTime: {
-                        gte: windowStart,
-                        lte: windowEnd,
-                      },
-                    },
-                    select: {
-                      id: true,
-                      movieId: true,
-                      dateTime: true,
-                      format: true,
-                      language: true,
-                      ticketUrl: true,
-                    },
-                  });
-
-                  const obsoleteIds: number[] = [];
-                  const unchangedKeys = new Set<string>();
-
-                  for (const row of existing) {
-                    const key = buildShowtimeCompositeKey(row);
-                    const incoming = incomingByKey.get(key);
-                    if (
-                      !incoming ||
-                      incoming.ticketUrl !== row.ticketUrl ||
-                      unchangedKeys.has(key)
-                    ) {
-                      obsoleteIds.push(row.id);
-                    } else {
-                      unchangedKeys.add(key);
-                    }
-                  }
-
-                  const toInsert = dedupedBatch.filter(
-                    (row) => !unchangedKeys.has(buildShowtimeCompositeKey(row)),
-                  );
-
-                  if (obsoleteIds.length > 0) {
-                    await tx.showtime.deleteMany({
-                      where: { id: { in: obsoleteIds } },
-                    });
-                  }
-
-                  let insertedCount = 0;
-                  if (toInsert.length > 0) {
-                    const created = await tx.showtime.createMany({
-                      data: toInsert,
-                      skipDuplicates: true,
-                    });
-                    insertedCount = created.count;
-                  }
-
-                  return {
-                    insertedCount,
-                    unchangedCount: unchangedKeys.size,
-                  };
-                }
-
-                await tx.showtime.deleteMany({
+                const existing = await tx.showtime.findMany({
                   where: {
                     locationId: resolvedLocationId,
                     dateTime: {
@@ -736,14 +672,56 @@ export class ScraperOrchestratorService {
                       lte: windowEnd,
                     },
                   },
+                  select: {
+                    id: true,
+                    movieId: true,
+                    dateTime: true,
+                    format: true,
+                    language: true,
+                    ticketUrl: true,
+                  },
                 });
 
-                const created = await tx.showtime.createMany({
-                  data: dedupedBatch,
-                  skipDuplicates: true,
-                });
+                const obsoleteIds: number[] = [];
+                const unchangedKeys = new Set<string>();
 
-                return { insertedCount: created.count, unchangedCount: 0 };
+                for (const row of existing) {
+                  const key = buildShowtimeCompositeKey(row);
+                  const incoming = incomingByKey.get(key);
+                  if (
+                    !incoming ||
+                    incoming.ticketUrl !== row.ticketUrl ||
+                    unchangedKeys.has(key)
+                  ) {
+                    obsoleteIds.push(row.id);
+                  } else {
+                    unchangedKeys.add(key);
+                  }
+                }
+
+                const toInsert = dedupedBatch.filter(
+                  (row) => !unchangedKeys.has(buildShowtimeCompositeKey(row)),
+                );
+
+                if (obsoleteIds.length > 0) {
+                  await tx.showtime.deleteMany({
+                    where: { id: { in: obsoleteIds } },
+                  });
+                }
+
+                let insertedCount = 0;
+                if (toInsert.length > 0) {
+                  const created = await tx.showtime.createMany({
+                    data: toInsert,
+                    skipDuplicates: true,
+                  });
+                  insertedCount = created.count;
+                }
+
+                return {
+                  insertedCount,
+                  unchangedCount: unchangedKeys.size,
+                };
               },
               { maxWait: 5000, timeout: 15000 },
             );

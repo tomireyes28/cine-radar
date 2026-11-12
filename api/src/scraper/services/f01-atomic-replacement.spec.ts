@@ -24,7 +24,11 @@ interface TransactionalPrismaMock {
   inTransaction: boolean;
   cinemaChain: { upsert: jest.Mock };
   cinemaLocation: { findMany: jest.Mock; create: jest.Mock };
-  showtime: { deleteMany: jest.Mock; createMany: jest.Mock };
+  showtime: {
+    findMany: jest.Mock;
+    deleteMany: jest.Mock;
+    createMany: jest.Mock;
+  };
   $transaction: jest.Mock;
 }
 
@@ -63,13 +67,18 @@ function createTransactionalStore(
       ),
     },
     showtime: {
+      findMany: jest.fn(),
       deleteMany: jest.fn(),
       createMany: jest.fn(),
     },
     $transaction: jest.fn(
       async <T>(
         cb: (tx: {
-          showtime: { deleteMany: jest.Mock; createMany: jest.Mock };
+          showtime: {
+            findMany: jest.Mock;
+            deleteMany: jest.Mock;
+            createMany: jest.Mock;
+          };
         }) => Promise<T>,
       ): Promise<T> => {
         const workingCopy: StoredShowtime[] = committedRows.map((r) => ({
@@ -79,11 +88,30 @@ function createTransactionalStore(
 
         const txClient = {
           showtime: {
+            findMany: jest.fn(
+              ({
+                where,
+              }: {
+                where: {
+                  locationId: number;
+                  dateTime: { gte: Date; lte: Date };
+                };
+              }) =>
+                Promise.resolve(
+                  workingCopy.filter(
+                    (row) =>
+                      row.locationId === where.locationId &&
+                      row.dateTime >= where.dateTime.gte &&
+                      row.dateTime <= where.dateTime.lte,
+                  ),
+                ),
+            ),
             deleteMany: jest.fn(
               ({
                 where,
               }: {
                 where: {
+                  id?: { in: number[] };
                   locationId?: number;
                   dateTime?: { lt?: Date; gte?: Date; lte?: Date };
                 };
@@ -91,6 +119,7 @@ function createTransactionalStore(
                 let count = 0;
                 for (let i = workingCopy.length - 1; i >= 0; i--) {
                   const r = workingCopy[i];
+                  if (where.id && !where.id.in.includes(r.id)) continue;
                   if (
                     where.locationId !== undefined &&
                     r.locationId !== where.locationId

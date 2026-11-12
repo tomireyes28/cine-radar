@@ -74,6 +74,11 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Run PostgreSQL integration tests
+        env:
+          TEST_POSTGRES_URL: postgresql://postgres:ci_password@localhost:5432/postgres
+        run: npm run test:integration
+
       - name: Run E2E tests
         run: npm run test:e2e
 
