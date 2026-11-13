@@ -16,7 +16,25 @@ describe('R09 reproducible health benchmark', () => {
       log: [{ emit: 'event', level: 'query' }],
     });
     let queries = 0;
-    db.$on('query', () => queries++);
+    let barrierDone: (() => void) | undefined;
+    db.$on('query', (event) => {
+      if (event.query.includes('health_benchmark_event_barrier'))
+        barrierDone?.();
+      else queries++;
+    });
+    // Query events can reach JS after the query's promise resolves. Wait for
+    // an engine event barrier instead of sampling a counter too early. The
+    // instrumentation query itself is excluded from the measured workload.
+    const drainQueryEvents = async () => {
+      const drained = new Promise<void>((resolve) => {
+        barrierDone = resolve;
+      });
+      await Promise.all([
+        db.$queryRawUnsafe('SELECT 1 /* health_benchmark_event_barrier */'),
+        drained,
+      ]);
+      barrierDone = undefined;
+    };
     const prisma = db as PrismaService;
     try {
       await reset(prisma);
@@ -54,14 +72,17 @@ describe('R09 reproducible health benchmark', () => {
         elapsedMs: number;
       }[] = [];
       const measure = async (mode: string, work: () => Promise<unknown>) => {
+        await drainQueryEvents();
         queries = 0;
         const start = performance.now();
         await work();
+        const elapsedMs = Math.round(performance.now() - start);
+        await drainQueryEvents();
         results.push({
           mode,
           probes: 100,
           queries,
-          elapsedMs: Math.round(performance.now() - start),
+          elapsedMs,
         });
       };
       await measure('before-serial', async () => {
