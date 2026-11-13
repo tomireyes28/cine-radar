@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { CinemaChain } from '@prisma/client';
+import { CinemaChain, Prisma } from '@prisma/client';
 import {
   getArgentinaDayRange,
   getArgentinaTodayDateString,
@@ -38,26 +38,39 @@ export class MoviesService {
     this.cache.set(key, data, ttlSeconds * 1000);
   }
 
+  private buildLocationWhere(
+    filters: MovieFilters,
+  ): Prisma.CinemaLocationWhereInput {
+    const term = filters.city?.trim();
+    // Prisma contains uses LIKE/ILIKE: treat input as literal text, not wildcard syntax.
+    const contains = term?.replace(/[\\%_]/g, '\\$&');
+    return {
+      OR: contains
+        ? [
+            { city: { contains, mode: 'insensitive' } },
+            { name: { contains, mode: 'insensitive' } },
+          ]
+        : undefined,
+      zone: filters.zone
+        ? { equals: filters.zone, mode: 'insensitive' }
+        : undefined,
+      chainId: isValidPositiveInt4String(filters.chainId)
+        ? Number(filters.chainId)
+        : undefined,
+      id: isValidPositiveInt4String(filters.cinemaId)
+        ? Number(filters.cinemaId)
+        : undefined,
+    };
+  }
+
   async getNowPlaying(filters: MovieFilters): Promise<NowPlayingMovieItem[]> {
     const { date, city, zone, chainId, cinemaId } = filters;
     const { dateKey, start, end } = getArgentinaDayRange(date);
-    const cacheKey = `now-playing:${dateKey}:${city || ''}:${zone || ''}:${chainId || ''}:${cinemaId || ''}`;
+    const cacheKey = `now-playing:${JSON.stringify([dateKey, city?.trim() || '', zone || '', chainId || '', cinemaId || ''])}`;
     const cached = this.getFromCache<NowPlayingMovieItem[]>(cacheKey);
     if (cached) return cached;
 
-    const parsedChainId = isValidPositiveInt4String(chainId)
-      ? Number(chainId)
-      : undefined;
-    const parsedCinemaId = isValidPositiveInt4String(cinemaId)
-      ? Number(cinemaId)
-      : undefined;
-
-    const locationWhere = {
-      name: city ? { contains: city, mode: 'insensitive' as const } : undefined,
-      zone: zone ? { equals: zone, mode: 'insensitive' as const } : undefined,
-      chainId: parsedChainId,
-      id: parsedCinemaId,
-    };
+    const locationWhere = this.buildLocationWhere(filters);
 
     const movies = await this.prisma.movie.findMany({
       where: {
@@ -173,7 +186,7 @@ export class MoviesService {
     id: number,
     filters: MovieFilters,
   ): Promise<MovieDetailResponse | null> {
-    const { date, city, zone, chainId, cinemaId } = filters;
+    const { date } = filters;
     const { start, end } = getArgentinaDayRange(date);
 
     const movie = await this.prisma.movie.findUnique({
@@ -182,12 +195,7 @@ export class MoviesService {
 
     if (!movie) return null;
 
-    const parsedChainId = isValidPositiveInt4String(chainId)
-      ? Number(chainId)
-      : undefined;
-    const parsedCinemaId = isValidPositiveInt4String(cinemaId)
-      ? Number(cinemaId)
-      : undefined;
+    const locationWhere = this.buildLocationWhere(filters);
 
     const showtimes = await this.prisma.showtime.findMany({
       where: {
@@ -196,12 +204,7 @@ export class MoviesService {
           gte: start,
           lte: end,
         },
-        location: {
-          name: city ? { contains: city, mode: 'insensitive' } : undefined,
-          zone: zone ? { equals: zone, mode: 'insensitive' } : undefined,
-          chainId: parsedChainId,
-          id: parsedCinemaId,
-        },
+        location: locationWhere,
       },
       include: {
         location: {

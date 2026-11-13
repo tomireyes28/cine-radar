@@ -50,7 +50,8 @@ export class GetMoviesDto {
   date?: string;
 
   @ApiPropertyOptional({
-    description: 'Filtrar por ciudad o nombre del complejo',
+    description:
+      'Coincidencia parcial por ciudad o nombre del complejo, sin distinguir mayúsculas según la colación de la base. Se preservan acentos y se busca texto literal.',
     example: 'Palermo',
   })
   @IsOptional()
