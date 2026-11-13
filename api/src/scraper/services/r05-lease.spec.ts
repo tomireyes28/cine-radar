@@ -62,4 +62,37 @@ describe('R05 lease lifecycle and cancellation', () => {
     expect(operation).toHaveBeenCalledTimes(1);
     expect(jest.getTimerCount()).toBe(0);
   });
+  it('still aborts on connection errors instead of treating them as contention', async () => {
+    const lease = new ScraperLease(
+      () => Promise.resolve(),
+      () => Promise.reject(new Error('database unavailable')),
+      10,
+      1000,
+    );
+    await jest.advanceTimersByTimeAsync(10);
+    expect(lease.signal.aborted).toBe(true);
+    await lease.close();
+  });
+
+  it('does not extend the execution deadline when lock contention persists', async () => {
+    const contention = new Prisma.PrismaClientKnownRequestError(
+      'lock timeout',
+      {
+        code: 'P2010',
+        clientVersion: 'test',
+        meta: { code: '55P03' },
+      },
+    );
+    const renew = jest.fn().mockRejectedValue(contention);
+    const lease = new ScraperLease(() => Promise.resolve(), renew, 10, 50);
+    const failed = expect(
+      lease.run(() => new Promise<never>(() => undefined)),
+    ).rejects.toThrow('deadline');
+    await jest.advanceTimersByTimeAsync(49);
+    expect(lease.signal.aborted).toBe(false);
+    expect(renew).toHaveBeenCalledTimes(4);
+    await jest.advanceTimersByTimeAsync(1);
+    await failed;
+    await lease.close();
+  });
 });

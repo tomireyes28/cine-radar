@@ -77,8 +77,16 @@ export class ScraperLease {
       this.assertActive();
       if (!(await this.renew()))
         this.abort('Scraping lease is no longer owned');
-    } catch {
-      this.abort('Scraping lease renewal failed');
+    } catch (error) {
+      // A fenced write holds its lease row until COMMIT. The heartbeat uses a
+      // different transaction and can time out waiting on that same owner.
+      // Defer only that contention; do not claim renewal or extend the local
+      // deadline. Every write still checks live ownership and expiry in SQL.
+      const contended =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2010' &&
+        error.meta?.code === '55P03';
+      if (!contended) this.abort('Scraping lease renewal failed');
     }
     this.scheduleHeartbeat();
   }
