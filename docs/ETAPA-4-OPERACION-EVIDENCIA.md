@@ -50,11 +50,11 @@ Medición local del 13/11/2026, Windows, Node 22, PostgreSQL 15.19, 100 sondeos 
 Desde `api/`, con dependencias instaladas en `api/` y `web/`:
 
 ```sh
-npx puppeteer browsers install chrome --install-deps
+npx puppeteer browsers install chrome
 npm run test:browser
 ```
 
-También admite `PUPPETEER_EXECUTABLE_PATH` para usar Chrome instalado; en Windows se verificó con Chrome local. El script inicia Next y una API de fixtures en `127.0.0.1:33440/33441`, bloquea solicitudes externas del navegador y cierra sus procesos al terminar. Requiere esos puertos libres. No usa Prisma, proveedores de cine ni TMDB.
+También admite `PUPPETEER_EXECUTABLE_PATH` para usar Chrome instalado; en Windows se verificó con Chrome local. CI usa `/usr/bin/google-chrome-stable`, ya incluido en la imagen del runner, y comprueba su versión antes del recorrido. Así evita descargar otro navegador e instalar dependencias del sistema con `--install-deps`, operación que requiere root y causó el primer fallo remoto de CI. En un Linux propio podrían hacer falta paquetes del sistema, que debe instalar su administrador. El script inicia Next y una API de fixtures en `127.0.0.1:33440/33441`, bloquea solicitudes externas del navegador y cierra sus procesos al terminar. Requiere esos puertos libres. No usa Prisma, proveedores de cine ni TMDB.
 
 Recorrido aprobado: cartelera, búsqueda/limpieza, filtro de zona conservando fecha, detalle y selector de cine conservando fecha, enlace de entradas con `noopener`, estreno en diálogo móvil, foco dentro del diálogo y devolución al disparador con Escape, ausencia de desborde horizontal móvil, vacío válido, 404 y error de proveedor 503 llegando al error boundary. Se inspeccionaron las capturas de detalle de escritorio y diálogo móvil, disponibles localmente en `api/.tmp/browser-journey/`. Es una prueba funcional en navegador con fixtures, no una prueba de los proveedores vivos ni una auditoría completa de accesibilidad. CI incorpora el mismo recorrido.
 

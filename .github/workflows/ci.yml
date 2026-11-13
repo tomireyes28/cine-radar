@@ -85,10 +85,12 @@ jobs:
       - name: Install frontend for controlled browser journey
         run: npm ci --prefix ../web
 
-      - name: Install Chromium for browser tests
-        run: npx puppeteer browsers install chrome --install-deps
+      - name: Verify preinstalled Chrome for browser tests
+        run: /usr/bin/google-chrome-stable --version
 
       - name: Run real browser journey against fixture API
+        env:
+          PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
         run: npm run test:browser
 
   web:
