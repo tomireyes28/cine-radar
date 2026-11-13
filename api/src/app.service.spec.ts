@@ -41,9 +41,11 @@ describe('Observability, Health Readiness & Proxy Trust (M6)', () => {
         showtime: {
           count: jest.fn().mockResolvedValue(420),
           aggregate: jest.fn().mockResolvedValue({
+            _count: { _all: 420 },
             _max: { dateTime: horizonDate },
           }),
         },
+        chainScrapeState: { findMany: jest.fn().mockResolvedValue([]) },
         scrapeRun: {
           findFirst: jest.fn().mockResolvedValue({
             id: 7,
@@ -66,10 +68,11 @@ describe('Observability, Health Readiness & Proxy Trust (M6)', () => {
 
       expect(health.status).toBe('ok');
       expect(health.database).toBe('connected');
-      expect(health.billboard).toEqual({
+      expect(health.billboard).toMatchObject({
         activeFutureShowtimes: 420,
         horizonUntil: horizonDate.toISOString(),
-        isStale: false,
+        isStale: true,
+        freshness: 'unknown',
       });
       expect(health.lastScrapeRun).toEqual({
         id: 7,
@@ -128,7 +131,9 @@ describe('Observability, Health Readiness & Proxy Trust (M6)', () => {
         },
         scrapeRun: {
           create: createScrapeRunSpy,
+          findMany: jest.fn().mockResolvedValue([]),
         },
+        $executeRaw: jest.fn().mockResolvedValue(1),
       };
       prismaMock.$transaction = jest.fn(
         (cb: (tx: Record<string, unknown>) => Promise<unknown>) =>

@@ -43,7 +43,7 @@ describe('R04 concurrent movie identity across independent Prisma clients', () =
   ): MovieIdentityService {
     return new MovieIdentityService(
       db,
-      { lookupMovie: lookup } as TmdbService,
+      { lookupMovie: lookup } as unknown as TmdbService,
       new TitleNormalizerService(),
     );
   }

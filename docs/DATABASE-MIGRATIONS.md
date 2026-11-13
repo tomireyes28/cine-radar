@@ -56,3 +56,9 @@ A partir de este punto, toda evolución posterior del esquema (por ejemplo, nuev
 ## Etapa 1, R03: alias de películas
 
 `20261111143000_add_movie_source_aliases` es aditiva y debe aplicarse antes de ejecutar el worker de la etapa 1. Agrega `MovieAlias` con clave de origen, título original y FK a Movie. No modifica migraciones anteriores ni reasigna funciones heredadas. Validar primero en una copia aislada y seguir el procedimiento de despliegue descrito arriba.
+
+## Etapa 4, R09: frescura por cadena
+
+`20261113170000_chain_scrape_state` agrega únicamente `ChainScrapeState`. Aplicar con `npx prisma migrate deploy` antes de iniciar el worker actualizado. No borra ni reconstruye películas, funciones o corridas anteriores. La suite PostgreSQL ensaya el DDL sobre un esquema previo poblado con datos sintéticos y comprueba que conserva esos datos, además de aplicar las siete migraciones desde cero.
+
+Los checkpoints comienzan vacíos: `/health` informa frescura `unknown` hasta recibir evidencia de las nuevas corridas; no convierte un `ScrapeRun` global histórico en éxito de todas las cadenas. Un esquema sin la tabla nueva informa `metricsStatus: unavailable` mientras readiness siga comprobando conexión. Esta verificación local no aplica migraciones sobre la base configurada ni reemplaza el ensayo de despliegue sobre una copia de producción.

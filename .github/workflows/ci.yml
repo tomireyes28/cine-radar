@@ -82,6 +82,15 @@ jobs:
       - name: Run E2E tests
         run: npm run test:e2e
 
+      - name: Install frontend for controlled browser journey
+        run: npm ci --prefix ../web
+
+      - name: Install Chromium for browser tests
+        run: npx puppeteer browsers install chrome --install-deps
+
+      - name: Run real browser journey against fixture API
+        run: npm run test:browser
+
   web:
     name: Frontend (Lint, Typecheck & Build)
     runs-on: ubuntu-latest

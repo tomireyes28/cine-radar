@@ -8,7 +8,9 @@ export class AppController {
   constructor(private readonly appService: AppService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Estado ligero de actividad del servicio API (liveness)' })
+  @ApiOperation({
+    summary: 'Estado ligero de actividad del servicio API (liveness)',
+  })
   getStatus() {
     return this.appService.getLivenessStatus();
   }
@@ -20,7 +22,8 @@ export class AppController {
   })
   @ApiResponse({
     status: 200,
-    description: 'Base de datos conectada y métricas de frescura de cartelera',
+    description:
+      'Base conectada; frescura por cadena y estado de métricas separados de readiness (pueden estar degradados con HTTP 200)',
   })
   @ApiResponse({
     status: 503,

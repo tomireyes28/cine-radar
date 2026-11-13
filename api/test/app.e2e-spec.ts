@@ -1,7 +1,4 @@
-import {
-  INestApplication,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -43,6 +40,7 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
     scrapeRun: {
       findFirst: findFirstScrapeRunSpy,
     },
+    chainScrapeState: { findMany: jest.fn().mockResolvedValue([]) },
     cinemaLocation: {
       findMany: findManyLocationsSpy,
     },
@@ -76,6 +74,7 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
     queryRawSpy.mockResolvedValue([{ '?column?': 1 }]);
     countShowtimesSpy.mockResolvedValue(120);
     aggregateShowtimesSpy.mockResolvedValue({
+      _count: { _all: 120 },
       _max: { dateTime: new Date('2026-11-12T23:00:00.000Z') },
     });
     findFirstScrapeRunSpy.mockResolvedValue({
@@ -153,7 +152,7 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
       ).billboard,
     ).toMatchObject({
       activeFutureShowtimes: 120,
-      isStale: false,
+      isStale: true,
     });
 
     const rejectedRes = await request(app.getHttpServer())
@@ -161,9 +160,7 @@ describe('HTTP Contract & Bootstrap Suite (e2e - F17)', () => {
       .set('Origin', 'https://untrusted-third-party.vercel.app')
       .expect(200);
 
-    expect(
-      rejectedRes.headers['access-control-allow-origin'],
-    ).toBeUndefined();
+    expect(rejectedRes.headers['access-control-allow-origin']).toBeUndefined();
 
     queryRawSpy.mockRejectedValueOnce(new Error('PostgreSQL down'));
     await request(app.getHttpServer()).get('/health').expect(503);

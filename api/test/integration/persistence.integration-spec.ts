@@ -93,7 +93,7 @@ describe('R06 PostgreSQL persistence through the production Prisma path', () => 
               genres: [],
             },
           } satisfies TmdbLookupResult),
-      } as TmdbService,
+      } as unknown as TmdbService,
       new TitleNormalizerService(),
     );
   });

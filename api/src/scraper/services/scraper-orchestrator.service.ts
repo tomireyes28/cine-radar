@@ -1,5 +1,6 @@
 import { fencedTransaction, ScraperLease, WriteFence } from './scraper-lease';
 import { enforceVerifiedCoverage } from './coverage-policy.util';
+import { checkpointChains, pruneScrapeRuns } from './scrape-telemetry';
 import {
   ConflictException,
   Injectable,
@@ -458,7 +459,7 @@ export class ScraperOrchestratorService {
       showtimesInserted: number;
       showtimesUnchanged: number;
       failedChains: string[];
-      summaryJson: unknown;
+      summaryJson: OrchestratorChainSummary | OrchestratorRunSummary;
     },
     fence?: WriteFence,
   ): Promise<void> {
@@ -469,8 +470,8 @@ export class ScraperOrchestratorService {
     }
 
     try {
-      const create = (tx: Prisma.TransactionClient) =>
-        tx.scrapeRun.create({
+      const create = async (tx: Prisma.TransactionClient) => {
+        await tx.scrapeRun.create({
           data: {
             trigger: entry.trigger,
             scope: entry.scope,
@@ -489,8 +490,16 @@ export class ScraperOrchestratorService {
             ) as Prisma.InputJsonValue,
           },
         });
+        const summary = entry.summaryJson;
+        await checkpointChains(
+          tx,
+          'chains' in summary ? summary.chains : [summary],
+          entry.completedAt,
+        );
+        await pruneScrapeRuns(tx, entry.completedAt);
+      };
       if (fence) await fencedTransaction(this.prisma, fence, create);
-      else await create(this.prisma);
+      else await this.prisma.$transaction(create);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(

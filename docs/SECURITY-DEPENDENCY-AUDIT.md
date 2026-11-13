@@ -1,6 +1,8 @@
 # Evaluación de Dependencias y Alertas de Seguridad (`F05`)
 
-Fecha de actualización: 7 de noviembre de 2026.
+Última consulta: 13 de noviembre de 2026. Evidencia original de remediación: 7 de noviembre.
+
+Revalidación con `npm audit --omit=dev`: frontend 0 alertas; API 7 paquetes afectados, 3 altos y 4 bajos, en los mismos árboles listados abajo. No son siete explotaciones demostradas. Responsable de seguimiento: mantenimiento del repositorio; próxima revisión prevista: 13 de diciembre de 2026, o antes ante cambios de dependencias/exposición. La evaluación está limitada al código y entradas actuales; no acredita seguridad absoluta del entorno desplegado.
 
 ## Resumen de remediación (`npm audit --omit=dev`)
 
@@ -15,8 +17,8 @@ Siguiendo la recomendación de ingeniería de **no ejecutar `npm audit fix --for
 
 1. **`deepmerge-ts` → `@prisma/config` → `prisma` (Severidad reportada: High)**
    - **Condición de explotación:** Afecta al parser de archivos de configuración de la herramienta CLI `prisma` ante grafos de objetos recursivos cíclicos.
-   - **Impacto en Cine Radar:** **No explotable en ejecución.** El servidor HTTP y el worker usan únicamente `@prisma/client` con configuración estática del repositorio; ninguna entrada de usuario ni respuesta externa pasa por `@prisma/config`. La remediación upstream requiere migrar de Prisma 6 a Prisma 7+ (cambio mayor de arquitectura de `schema.prisma` / `prisma.config.ts`), planificable como actualización mayor independiente.
+   - **Exposición observada:** Prisma CLI está en devDependencies. El servidor HTTP y el worker usan `@prisma/client` con configuración estática; no se identificó un recorrido desde entradas de usuario o respuestas externas a `@prisma/config`. Mantener la alerta bajo seguimiento y evaluar una actualización mayor de Prisma por separado, con sus migraciones y pruebas de compatibilidad.
 
 2. **`deepmerge` → `puppeteer-extra` / `puppeteer-extra-plugin-stealth` (Severidad reportada: Low)**
    - **Condición de explotación:** Contaminación de prototipo si se fusionan objetos controlados por un atacante en `mergeObject()`.
-   - **Impacto en Cine Radar:** **No explotable en ejecución.** `puppeteer-extra` solo se instancia internamente en `CinepolisService` con opciones literales fijas y nunca recibe payloads externos. El comando sugerido por npm (`--force`) degrada `puppeteer-extra` a `2.1.3` rompiendo compatibilidad con Puppeteer moderno.
+   - **Exposición observada:** `puppeteer-extra` se instancia en `CinepolisService` con opciones internas fijas; no se identificó una fusión de opciones controladas por usuarios o proveedores en ese recorrido. Esto reduce la exposición observada, pero no elimina el aviso transitivo ni sustituye revisar cambios futuros. Evitar `npm audit fix --force` sin verificar el árbol resultante y la compatibilidad del navegador.

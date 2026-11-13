@@ -226,6 +226,12 @@ describe('R05 PostgreSQL lease renewal, deadlines and stale writer fencing', () 
     expect(await first.cinemaChain.count()).toBe(6);
     expect(await first.scraperLock.count()).toBe(0);
     expect(await first.scrapeRun.count()).toBe(1);
+    expect(await first.chainScrapeState.count()).toBe(6);
+    expect(
+      await first.chainScrapeState.count({
+        where: { status: 'empty_verified', lastSuccessAt: { not: null } },
+      }),
+    ).toBe(6);
   });
   it('does not let a suspended orchestrator overwrite a successor snapshot', async () => {
     const locks = new ScraperLockService(first, { heartbeatMs: 60000 });
@@ -319,7 +325,7 @@ describe('R05 PostgreSQL lease renewal, deadlines and stale writer fencing', () 
           entered.resolve();
           return finish.promise;
         },
-      } as TmdbService,
+      } as unknown as TmdbService,
       new TitleNormalizerService(),
     );
     const data: ScrapedChainResult = {

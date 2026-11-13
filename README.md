@@ -58,7 +58,7 @@ flowchart LR
 ### 3. Resolución Determinística de Películas y Resiliencia HTTP
 - **Identidad desacoplada (`MovieIdentityService`)**: Cada película posee `normalizedKey` único independiente de `tmdbId` (nullable) y estado `tmdbStatus` (`matched` | `not_found` | `pending`). Si TMDB falla transitoriamente durante el scraping, la función se publica con identidad local y se reconcilia automáticamente en corridas posteriores sin duplicar registros.
 - **Ranking de candidatos y caché acotada**: `TmdbService` puntúa coincidencias exactas normalizadas, pistas de año y ventana de estreno, deduplica promesas concurrentes (*in-flight*) y acota memoria con `BoundedTtlCache` (LRU + TTL diferenciado para aciertos y ausencias confirmadas).
-- **Observabilidad (`GET /health` y `ScrapeRun`)**: Separa liveness (`GET /`) de readiness real (`GET /health`, que verifica `SELECT 1` en PostgreSQL, cantidad de funciones futuras vigentes, horizonte cubierto y el resumen de la última corrida registrada en `ScrapeRun`).
+- **Observabilidad (`GET /health`, `ScrapeRun` y `ChainScrapeState`)**: Liveness en `GET /`; readiness comprueba PostgreSQL en cada sondeo. La frescura se calcula por cadena con un umbral de 36 horas y distingue fallos de vacíos verificados, sin convertir datos degradados en un fallo de arranque. Las métricas se reutilizan 15 segundos y el historial se depura por lotes tras 30 días. Semántica, benchmark y límites en [Etapa 4](docs/ETAPA-4-OPERACION-EVIDENCIA.md).
 
 ---
 
@@ -124,6 +124,7 @@ cd api
 npm run lint:check          # ESLint sin warnings ni mutación de archivos
 npm test                    # Tests unitarios (scrapers con fixtures locales, orquestador, caché, DTOs)
 npm run test:e2e            # Contratos HTTP, CORS, validación y readiness /health
+npm run test:browser        # Chrome/Chromium real + Next y API local de fixtures (ver Etapa 4)
 npm run build
 
 # Frontend (/web)

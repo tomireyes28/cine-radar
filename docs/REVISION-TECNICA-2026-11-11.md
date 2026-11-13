@@ -137,6 +137,8 @@ Orden práctico: agregar R06 antes de modificar la lógica concurrente para cont
 
 ## Comprobaciones pendientes, separadas de defectos confirmados
 
+Actualización del 13/11: R01–R10 tienen correcciones y regresiones en las cuatro etapas nuevas. [Etapa 4](ETAPA-4-OPERACION-EVIDENCIA.md) documenta el cierre de R09, el benchmark y el recorrido real de navegador. Las comprobaciones de infraestructura/proveedores siguientes siguen siendo verificaciones de despliegue; el informe original se conserva como evidencia del diagnóstico.
+
 - Instalación limpia y actualización de una copia con datos heredados mediante las migraciones actuales; validar también homónimos en el backfill de normalizedKey.
 - Prueba viva de cada adaptador y semántica de fechas/idiomas; la revisión local no demuestra cobertura productiva de 68 sedes.
 - Topología real del proxy y TRUST_PROXY. El valor por defecto de un salto en producción requiere comprobar las rutas de acceso del hosting.

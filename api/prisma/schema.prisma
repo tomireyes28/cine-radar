@@ -105,3 +105,14 @@ model MovieAlias {
 
   @@index([movieId])
 }
+
+// Compact checkpoints survive ScrapeRun history retention.
+model ChainScrapeState {
+  chainKey               String    @id
+  lastAttemptAt          DateTime
+  lastSuccessAt          DateTime?
+  status                 String
+  expectedLocations      Int
+  verifiedLocations      Int
+  emptyVerifiedLocations Int
+}

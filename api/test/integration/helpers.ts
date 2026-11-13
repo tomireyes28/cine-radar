@@ -30,6 +30,7 @@ export function client(): PrismaService {
 }
 
 export async function reset(db: PrismaService): Promise<void> {
+  await db.chainScrapeState.deleteMany();
   await db.scrapeRun.deleteMany();
   await db.scraperLock.deleteMany();
   await db.movie.deleteMany();
