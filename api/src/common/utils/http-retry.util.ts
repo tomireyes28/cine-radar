@@ -3,8 +3,24 @@ export interface HttpRetryOptions {
   maxRetries?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
+  /** Cumulative sleep budget, independent of the backoff cap. Defaults to maxDelayMs. */
+  maxTotalDelayMs?: number;
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
+}
+
+export class HttpRetryDeferredError extends Error {
+  constructor(
+    readonly requiredDelayMs: number,
+    readonly remainingDelayMs: number,
+    cause: unknown,
+  ) {
+    super(
+      `HTTP retry deferred: required delay ${requiredDelayMs}ms exceeds remaining wait budget ${remainingDelayMs}ms`,
+      { cause },
+    );
+    this.name = 'HttpRetryDeferredError';
+  }
 }
 
 interface HttpErrorLike {
@@ -48,9 +64,13 @@ export function parseRetryAfterMs(
   headerValue: unknown,
   nowMs: number = Date.now(),
 ): number | null {
-  const raw: unknown = Array.isArray(headerValue)
-    ? (headerValue as readonly unknown[])[0]
-    : headerValue;
+  if (Array.isArray(headerValue)) {
+    const values = (headerValue as unknown[])
+      .map((value) => parseRetryAfterMs(value, nowMs))
+      .filter((value): value is number => value !== null);
+    return values.length ? Math.max(...values) : null;
+  }
+  const raw = headerValue;
   if (typeof raw !== 'string' && typeof raw !== 'number') {
     return null;
   }
@@ -62,7 +82,32 @@ export function parseRetryAfterMs(
     return Number(text) * 1000;
   }
 
-  const parsedDateMs = Date.parse(text);
+  // Reject Date.parse's permissive numeric/ISO inputs; HTTP-date has three specified forms.
+  const fixed =
+    /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+  const legacy =
+    /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT$/;
+  const asctime =
+    /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Z][a-z]{2} ( \d|\d{2}) \d{2}:\d{2}:\d{2} \d{4}$/;
+  let date = text;
+  const old = legacy.exec(text);
+  if (old) {
+    const currentYear = new Date(nowMs).getUTCFullYear();
+    let year = Math.floor(currentYear / 100) * 100 + Number(old[4]);
+    if (year > currentYear + 50) year -= 100;
+    if (year < currentYear - 49) year += 100;
+    date = `${old[2]} ${old[3]} ${year} ${old[5]} GMT`;
+  } else if (asctime.test(text)) {
+    date = `${text} GMT`; // asctime is UTC, never the execution host's timezone.
+  } else if (!fixed.test(text)) {
+    return null;
+  }
+  // HTTP-date permits a leap second; Date.parse does not. Round it forward, never earlier.
+  const leapSecond = /:60(?= (?:GMT|\d{4} GMT)$)/.test(date);
+  const parsedDateMs =
+    Date.parse(
+      leapSecond ? date.replace(/:60(?= (?:GMT|\d{4} GMT)$)/, ':59') : date,
+    ) + (leapSecond ? 1000 : 0);
   if (!Number.isNaN(parsedDateMs)) {
     return Math.max(0, parsedDateMs - nowMs);
   }
@@ -105,7 +150,8 @@ function computeRetryDelayMs(
   const retryAfterMs = parseRetryAfterMs(retryAfterHeader);
 
   if (retryAfterMs !== null) {
-    return Math.min(maxDelayMs, Math.max(baseDelayMs, retryAfterMs));
+    // The server's minimum must never be shortened by our exponential-backoff cap.
+    return Math.max(baseDelayMs, retryAfterMs);
   }
 
   const exponential = baseDelayMs * 2 ** attemptIndex;
@@ -126,11 +172,24 @@ export async function withHttpRetry<T>(
   const maxRetries = options.maxRetries ?? defaultRetries;
   const baseDelayMs = options.baseDelayMs ?? 400;
   const maxDelayMs = options.maxDelayMs ?? 8_000;
+  const maxTotalDelayMs = options.maxTotalDelayMs ?? maxDelayMs;
+  if (
+    !Number.isInteger(maxRetries) ||
+    maxRetries < 0 ||
+    ![baseDelayMs, maxDelayMs, maxTotalDelayMs].every(
+      (value) => Number.isFinite(value) && value >= 0 && value <= 2_147_483_647,
+    )
+  ) {
+    throw new RangeError(
+      'HTTP retry limits must be finite, non-negative timer durations and an integer retry count',
+    );
+  }
   const sleepFn =
     options.sleepFn ?? ((ms: number) => defaultSleep(ms, options.signal));
   const randomFn = options.randomFn ?? Math.random;
 
   let attempt = 0;
+  let totalDelayMs = 0;
   while (true) {
     options.signal?.throwIfAborted();
     try {
@@ -148,7 +207,12 @@ export async function withHttpRetry<T>(
         maxDelayMs,
         randomFn,
       );
+      const remainingDelayMs = maxTotalDelayMs - totalDelayMs;
+      if (!Number.isFinite(delayMs) || delayMs > remainingDelayMs) {
+        throw new HttpRetryDeferredError(delayMs, remainingDelayMs, error);
+      }
       attempt++;
+      totalDelayMs += delayMs;
       await sleepFn(delayMs);
     }
   }
