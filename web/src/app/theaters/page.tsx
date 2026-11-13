@@ -1,4 +1,4 @@
-import { getCinemas, getNearbyCinemas } from '@/lib/api';
+import { getCinemas, getNearbyCinemas } from '@/lib/server/data';
 import { parseCoordinatePair } from '@/lib/dates';
 import { MapPin } from 'lucide-react';
 import Link from 'next/link';

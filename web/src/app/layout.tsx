@@ -3,6 +3,8 @@ import { GeistSans } from 'geist/font/sans';
 import './globals.css';
 import Navbar from '@/components/ui/Navbar';
 
+export const runtime = 'nodejs';
+
 export const metadata: Metadata = {
   title: {
     default: 'Cine Radar | Cartelera y Horarios de Cine en Argentina',

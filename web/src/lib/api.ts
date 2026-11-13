@@ -1,5 +1,3 @@
-import type { Movie, MovieDetail } from "../types/movie.ts";
-
 export const DEFAULT_API_TIMEOUT_MS = 8_000;
 
 export type ApiErrorKind =
@@ -76,7 +74,7 @@ export interface BillboardFilters {
  * - Returns `null` ONLY on HTTP `404` (allowing routes to invoke `notFound()`).
  * - Preserves genuine `200 []` empty collections.
  * - Throws typed `ApiRequestError` on `429`, `5xx`, network failures, timeouts,
- *   or missing `NEXT_PUBLIC_API_URL` so Next.js `error.tsx` activates and ISR
+ *   or missing `HTTP base URL` so Next.js `error.tsx` activates and ISR
  *   never caches an outage as empty content.
  */
 export async function apiGet<T>(
@@ -85,13 +83,11 @@ export async function apiGet<T>(
   revalidate: number,
   options: ApiRequestOptions = {},
 ): Promise<T | null> {
-  const baseUrl = (
-    options.apiBaseUrl ?? process.env.NEXT_PUBLIC_API_URL
-  )?.trim();
+  const baseUrl = options.apiBaseUrl?.trim();
 
   if (!baseUrl) {
     throw new ApiRequestError(
-      `NEXT_PUBLIC_API_URL is not configured while requesting ${path}`,
+      `HTTP base URL is not configured while requesting ${path}`,
       { kind: "misconfigured", path },
     );
   }
@@ -103,7 +99,7 @@ export async function apiGet<T>(
     url = new URL(`${normalizedBase}${normalizedPath}`);
   } catch (cause: unknown) {
     throw new ApiRequestError(
-      `Invalid NEXT_PUBLIC_API_URL while requesting ${path}`,
+      `Invalid HTTP base URL while requesting ${path}`,
       { kind: "misconfigured", path, cause },
     );
   }
@@ -192,83 +188,4 @@ export async function apiGet<T>(
   } finally {
     clearTimeout(timeoutHandle);
   }
-}
-
-export async function getNowPlaying(
-  filters: BillboardFilters = {},
-  options?: ApiRequestOptions,
-): Promise<Movie[]> {
-  const data = await apiGet<Movie[]>(
-    "/movies/now-playing",
-    { ...filters },
-    300,
-    options,
-  );
-  return data ?? [];
-}
-
-export async function getMovieDetail(
-  id: string,
-  date?: string,
-  options?: ApiRequestOptions,
-): Promise<MovieDetail | null> {
-  return apiGet<MovieDetail>(`/movies/${id}`, { date }, 300, options);
-}
-
-export async function getCinemas(
-  options?: ApiRequestOptions,
-): Promise<CinemaChain[]> {
-  const data = await apiGet<CinemaChain[]>(
-    "/movies/filters",
-    {},
-    3600,
-    options,
-  );
-  return data ?? [];
-}
-
-export async function getCinemaById(id: string, options?: ApiRequestOptions) {
-  const chains = await getCinemas(options);
-
-  for (const chain of chains) {
-    const cinema = chain.locations.find((c) => c.id.toString() === id);
-    if (cinema) {
-      return { ...cinema, chainName: chain.name };
-    }
-  }
-  return null;
-}
-
-export async function getUpcomingMovies(
-  options?: ApiRequestOptions,
-): Promise<UpcomingMovie[]> {
-  const data = await apiGet<UpcomingMovie[]>(
-    "/movies/upcoming",
-    {},
-    3600,
-    options,
-  );
-  return data ?? [];
-}
-
-export async function getMoviesForCinema(
-  cinemaId: string,
-  date?: string,
-  options?: ApiRequestOptions,
-): Promise<Movie[]> {
-  return getNowPlaying({ cinemaId, date }, options);
-}
-
-export async function getNearbyCinemas(
-  lat: string,
-  lng: string,
-  options?: ApiRequestOptions,
-) {
-  const data = await apiGet<(CinemaLocation & { distance: number })[]>(
-    "/movies/nearby",
-    { lat, lng },
-    0,
-    options,
-  );
-  return data ?? [];
 }

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ApiRequestError, apiGet, getNowPlaying } from "./api.ts";
+import { ApiRequestError, apiGet } from "./api.ts";
 
 async function withServer(
   handler: RequestListener,
@@ -92,7 +92,7 @@ describe("R07 timeout includes response body consumption", () => {
             return response;
           };
           await assert.rejects(
-            getNowPlaying({}, { apiBaseUrl, fetchImpl, timeoutMs: 250 }),
+            apiGet("/probe", {}, 0, { apiBaseUrl, fetchImpl, timeoutMs: 250 }),
             errorKind("timeout", 200),
           );
           assert.equal(headersRead, true);
@@ -109,7 +109,7 @@ describe("R07 timeout includes response body consumption", () => {
       },
       async (apiBaseUrl) => {
         await assert.rejects(
-          getNowPlaying({}, { apiBaseUrl }),
+          apiGet("/probe", {}, 0, { apiBaseUrl }),
           errorKind("invalid_json", 200),
         );
       },
@@ -131,7 +131,7 @@ describe("R07 timeout includes response body consumption", () => {
           return response;
         };
         await assert.rejects(
-          getNowPlaying({}, { apiBaseUrl, fetchImpl }),
+          apiGet("/probe", {}, 0, { apiBaseUrl, fetchImpl }),
           errorKind("network", 200),
         );
       },
@@ -144,10 +144,11 @@ describe("R07 timeout includes response body consumption", () => {
       return Promise.resolve(new Response("[]"));
     };
     assert.deepEqual(
-      await getNowPlaying(
-        {},
-        { apiBaseUrl: "http://unused.test", fetchImpl, timeoutMs: 100 },
-      ),
+      await apiGet("/probe", {}, 0, {
+        apiBaseUrl: "http://unused.test",
+        fetchImpl,
+        timeoutMs: 100,
+      }),
       [],
     );
     await new Promise((resolve) => setTimeout(resolve, 150));
@@ -164,10 +165,11 @@ describe("R07 timeout includes response body consumption", () => {
         },
       } as Response);
     await assert.rejects(
-      getNowPlaying(
-        {},
-        { apiBaseUrl: "http://unused.test", fetchImpl, timeoutMs: 10 },
-      ),
+      apiGet("/probe", {}, 0, {
+        apiBaseUrl: "http://unused.test",
+        fetchImpl,
+        timeoutMs: 10,
+      }),
       errorKind("timeout", 200),
     );
   });
@@ -177,10 +179,11 @@ describe("R07 timeout includes response body consumption", () => {
         throw new Error("must not fetch");
       };
       await assert.rejects(
-        getNowPlaying(
-          {},
-          { apiBaseUrl: "http://unused.test", fetchImpl, timeoutMs },
-        ),
+        apiGet("/probe", {}, 0, {
+          apiBaseUrl: "http://unused.test",
+          fetchImpl,
+          timeoutMs,
+        }),
         errorKind("misconfigured"),
       );
     });

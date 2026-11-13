@@ -8,7 +8,7 @@ import { Ticket, Info, X } from 'lucide-react';
 import Link from 'next/link';
 
 import { Movie } from '@/types/movie';
-import { UpcomingMovie } from '@/lib/api';
+import type { UpcomingMovie } from '@/lib/api';
 import { buildMovieDetailHref } from '@/lib/navigation';
 
 interface MovieCardProps {

@@ -1,5 +1,5 @@
-// Real Chromium + Next.js, with an isolated fixture API. No configured database,
-// TMDB or cinema provider is contacted. Run from api/: npm run test:browser.
+// Real Chromium + Next.js, with real temporary PostgreSQL and a TMDB fixture. No configured database,
+// live TMDB or cinema provider is contacted. Run from api/: npm run test:browser.
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const path = require('node:path');
@@ -22,73 +22,43 @@ async function main() {
     overview: 'Sinopsis controlada.',
     cinemaCount: 1,
   };
-  const detail = {
-    ...movie,
-    cinemas: [
-      {
-        cinema: {
-          id: 10,
-          name: 'Sala de prueba',
-          address: 'Dirección de prueba',
-          zone: 'CABA',
-          chain: { name: 'Cadena de prueba' },
-        },
-        functions: [
+  const databaseUrl = new URL(
+    process.env.INTEGRATION_DATABASE_URL || 'invalid:',
+  );
+  if (
+    !['localhost', '127.0.0.1'].includes(databaseUrl.hostname) ||
+    !/^\/cine_radar_test_[a-f0-9]{32}$/.test(databaseUrl.pathname)
+  )
+    throw new Error('Use ephemeral --web --browser runner');
+  const { PrismaClient } = require('@prisma/client');
+  const admin = new PrismaClient({
+    datasources: { db: { url: databaseUrl.toString() } },
+  });
+  const readerRole = decodeURIComponent(
+    new URL(process.env.SUPABASE_DATABASE_URL).username,
+  );
+  if (!/^cine_radar_web_[a-f0-9]+$/.test(readerRole))
+    throw new Error('Expected test-only reader role');
+  const api = http.createServer((req, res) => {
+    requests.push(req.url);
+    res.setHeader('Content-Type', 'application/json');
+    if (new URL(req.url, apiOrigin).pathname !== '/movie/upcoming') {
+      res.writeHead(404).end('{}');
+      return;
+    }
+    res.end(
+      JSON.stringify({
+        results: [
           {
             id: 1,
-            time: '2099-01-01T23:00:00.000Z',
-            format: '2D',
-            language: 'SUB',
-            url: 'https://tickets.example.test/1',
+            title: movie.title,
+            poster_path: null,
+            release_date: '2099-01-01',
+            overview: movie.overview,
           },
         ],
-      },
-    ],
-  };
-  const api = http.createServer((req, res) => {
-    const url = new URL(req.url, apiOrigin);
-    requests.push(url.pathname + url.search);
-    res.setHeader('Content-Type', 'application/json');
-    if (url.pathname === '/movies/now-playing') {
-      if (url.searchParams.get('chainId') === '500') {
-        res.writeHead(503).end('{}');
-        return;
-      }
-      res.end(
-        JSON.stringify(
-          url.searchParams.get('zone') === 'Interior' ? [] : [movie],
-        ),
-      );
-    } else if (url.pathname === '/movies/upcoming') {
-      res.end(
-        JSON.stringify([
-          { ...movie, releaseDate: '2099-01-01', isReRelease: false },
-        ]),
-      );
-    } else if (url.pathname === '/movies/1') {
-      res.end(JSON.stringify(detail));
-    } else if (url.pathname === '/cinemas') {
-      res.end(
-        JSON.stringify([
-          {
-            id: 1,
-            name: 'Cadena de prueba',
-            locations: [
-              {
-                id: 10,
-                name: 'Sala de prueba',
-                address: 'Dirección de prueba',
-                chainId: 1,
-                lat: 0,
-                lng: 0,
-              },
-            ],
-          },
-        ]),
-      );
-    } else {
-      res.writeHead(404).end('{}');
-    }
+      }),
+    );
   });
   let next;
   let browser;
@@ -114,7 +84,8 @@ async function main() {
         windowsHide: true,
         env: {
           ...process.env,
-          NEXT_PUBLIC_API_URL: apiOrigin,
+          TMDB_FIXTURE_URL: apiOrigin,
+          TMDB_API_KEY: 'fixture-server-only-tmdb-key',
           NEXT_PUBLIC_SITE_URL: origin,
           NEXT_TELEMETRY_DISABLED: '1',
         },
@@ -151,6 +122,32 @@ async function main() {
       args: process.platform === 'linux' ? ['--no-sandbox'] : [],
     });
     const page = await browser.newPage();
+    const secrets = [
+      decodeURIComponent(new URL(process.env.SUPABASE_DATABASE_URL).password),
+      'fixture-server-only-tmdb-key',
+    ];
+    const responseChecks = [];
+    page.on('response', (response) => {
+      if (
+        /text|json|javascript/.test(response.headers()['content-type'] || '')
+      ) {
+        responseChecks.push(
+          response
+            .text()
+            .then((text) => {
+              for (const secret of secrets)
+                assert(
+                  !text.includes(secret),
+                  'Private credential in browser response',
+                );
+            })
+            .catch((error) => {
+              if (error instanceof assert.AssertionError) throw error;
+              // Redirect/prefetch responses can be canceled by client navigation.
+            }),
+        );
+      }
+    });
     page.setDefaultTimeout(20000);
     // Fail any unexpected external request before it leaves the browser.
     await page.setRequestInterception(true);
@@ -245,18 +242,30 @@ async function main() {
       ),
       true,
     );
-    await page.goto(`${origin}/?zone=Interior`, { waitUntil: 'networkidle0' });
+    await page.goto(`${origin}/?date=2099-01-01&zone=GBA+Sur`, {
+      waitUntil: 'networkidle0',
+    });
     await text('No encontramos nada');
     await page.goto(`${origin}/movie/999`, { waitUntil: 'networkidle0' });
     await text('Película o página no encontrada');
     assert.deepEqual(errors, []);
-    // Expected upstream failure must reach the error boundary, never an empty grid.
-    await page.goto(`${origin}/?chainId=500`, { waitUntil: 'networkidle0' });
+    // Expected database permission failure must reach the error boundary, never an empty grid.
+    await admin.$executeRawUnsafe(
+      `REVOKE SELECT (id) ON "Movie" FROM "${readerRole}"`,
+    );
+    await page.goto(`${origin}/movie/2147483647`, {
+      waitUntil: 'networkidle0',
+    });
     await text('Ocurrió un problema inesperado');
-    assert(requests.some((url) => url.includes('zone=CABA')));
-    assert(requests.some((url) => url.includes('/movies/1?date=2099-01-01')));
+    await Promise.all(responseChecks);
+    assert(
+      requests.length > 0 &&
+        requests.every(
+          (url) => new URL(url, apiOrigin).pathname === '/movie/upcoming',
+        ),
+    );
     console.log(
-      'Browser journey passed: search, filters, dates, cinema, ticket safety, mobile dialog/focus, empty, 404 and 503.',
+      'Browser journey passed: search, filters, dates, cinema, ticket safety, mobile dialog/focus, empty, 404 and database failure; no NestJS server.',
     );
   } finally {
     if (browser) await browser.close();
@@ -271,6 +280,10 @@ async function main() {
         await once(next, 'exit');
       }
     }
+    await admin.$executeRawUnsafe(
+      `GRANT SELECT (id) ON "Movie" TO "${readerRole}"`,
+    );
+    await admin.$disconnect();
     api.closeAllConnections();
     await new Promise((resolve) => api.close(resolve));
     fs.writeFileSync(path.join(artifactDir, 'next.log'), serverLog);

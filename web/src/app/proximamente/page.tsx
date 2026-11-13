@@ -1,4 +1,4 @@
-import { getUpcomingMovies } from '@/lib/api';
+import { getUpcomingMovies } from '@/lib/server/data';
 import MovieCard from '@/components/movies/MovieCard';
 import { CalendarDays, Film } from 'lucide-react';
 

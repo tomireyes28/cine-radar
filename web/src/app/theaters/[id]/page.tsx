@@ -5,7 +5,7 @@ import { es } from 'date-fns/locale';
 import { MapPin, Film, ChevronRight, Navigation, Calendar } from 'lucide-react';
 import MovieCard from '@/components/movies/MovieCard';
 import DateSelector from '@/components/movies/DateSelector';
-import { getCinemaById, getMoviesForCinema } from '@/lib/api';
+import { getCinemaById, getMoviesForCinema } from '@/lib/server/data';
 import { isValidPositiveInt4, resolveSelectedDate } from '@/lib/dates';
 import { Movie } from '@/types/movie';
 

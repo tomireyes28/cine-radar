@@ -4,7 +4,7 @@ import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { Clock, MapPin, Star, Ticket } from 'lucide-react';
 import { clsx } from 'clsx';
-import { getMovieDetail } from '@/lib/api';
+import { getMovieDetail } from '@/lib/server/data';
 import {
   formatTimeAR,
   getTodayArgentina,

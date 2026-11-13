@@ -88,10 +88,11 @@ jobs:
       - name: Verify preinstalled Chrome for browser tests
         run: /usr/bin/google-chrome-stable --version
 
-      - name: Run real browser journey against fixture API
+      - name: Verify standalone Next queries, reader permissions and real browser
         env:
           PUPPETEER_EXECUTABLE_PATH: /usr/bin/google-chrome-stable
-        run: npm run test:browser
+          TEST_POSTGRES_URL: postgresql://postgres:ci_password@localhost:5432/postgres
+        run: node test/run-postgres-tests.cjs --web --browser
 
   web:
     name: Frontend (Lint, Typecheck & Build)
@@ -100,9 +101,6 @@ jobs:
     defaults:
       run:
         working-directory: ./web
-
-    env:
-      NEXT_PUBLIC_API_URL: http://localhost:3001
 
     steps:
       - name: Checkout repository

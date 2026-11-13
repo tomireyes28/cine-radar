@@ -23,7 +23,7 @@
     "scrape": "ts-node src/cli/run-scrapers.ts",
     "scrape:prod": "node dist/cli/run-scrapers.js",
     "test:integration": "node test/run-postgres-tests.cjs",
-    "test:browser": "node test/browser-journey.cjs"
+    "test:browser": "node test/run-postgres-tests.cjs --web --browser"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",

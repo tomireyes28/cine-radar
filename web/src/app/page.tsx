@@ -1,4 +1,4 @@
-import { getCinemas, getNowPlaying } from '@/lib/api';
+import { getCinemas, getNowPlaying } from '@/lib/server/data';
 import {
   isValidCalendarDate,
   sanitizePositiveIntParam,
