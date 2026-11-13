@@ -1,14 +1,14 @@
-import type { Movie, MovieDetail } from '../types/movie.ts';
+import type { Movie, MovieDetail } from "../types/movie.ts";
 
 export const DEFAULT_API_TIMEOUT_MS = 8_000;
 
 export type ApiErrorKind =
-  | 'misconfigured'
-  | 'rate_limited'
-  | 'upstream_http'
-  | 'timeout'
-  | 'network'
-  | 'invalid_json';
+  | "misconfigured"
+  | "rate_limited"
+  | "upstream_http"
+  | "timeout"
+  | "network"
+  | "invalid_json";
 
 export class ApiRequestError extends Error {
   readonly kind: ApiErrorKind;
@@ -25,7 +25,7 @@ export class ApiRequestError extends Error {
     },
   ) {
     super(message, options.cause ? { cause: options.cause } : undefined);
-    this.name = 'ApiRequestError';
+    this.name = "ApiRequestError";
     this.kind = options.kind;
     this.status = options.status;
     this.path = options.path;
@@ -92,19 +92,19 @@ export async function apiGet<T>(
   if (!baseUrl) {
     throw new ApiRequestError(
       `NEXT_PUBLIC_API_URL is not configured while requesting ${path}`,
-      { kind: 'misconfigured', path },
+      { kind: "misconfigured", path },
     );
   }
 
   let url: URL;
   try {
-    const normalizedBase = baseUrl.replace(/\/+$/, '');
-    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const normalizedBase = baseUrl.replace(/\/+$/, "");
+    const normalizedPath = path.startsWith("/") ? path : `/${path}`;
     url = new URL(`${normalizedBase}${normalizedPath}`);
   } catch (cause: unknown) {
     throw new ApiRequestError(
       `Invalid NEXT_PUBLIC_API_URL while requesting ${path}`,
-      { kind: 'misconfigured', path, cause },
+      { kind: "misconfigured", path, cause },
     );
   }
 
@@ -114,83 +114,83 @@ export async function apiGet<T>(
 
   const fetchFn = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  if (
+    !Number.isFinite(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > 2_147_483_647
+  ) {
+    throw new ApiRequestError(
+      "API timeout must be a positive, finite timer duration",
+      { kind: "misconfigured", path },
+    );
+  }
   const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => {
-    const timeoutErr = new Error(`Request timed out after ${timeoutMs}ms`);
-    timeoutErr.name = 'TimeoutError';
-    controller.abort(timeoutErr);
-  }, timeoutMs);
-
-  let res: Response;
+  const deadline = performance.now() + timeoutMs;
+  const abortTimeout = () => {
+    const error = new Error(`Request timed out after ${timeoutMs}ms`);
+    error.name = "TimeoutError";
+    controller.abort(error);
+  };
+  const timeoutHandle = setTimeout(abortTimeout, timeoutMs);
+  const timeoutError = (cause: unknown, status?: number) =>
+    new ApiRequestError(`API request timed out after ${timeoutMs}ms: ${path}`, {
+      kind: "timeout",
+      path,
+      status,
+      cause,
+    });
   try {
-    res = await fetchFn(
-      url.toString(),
-      {
+    let res: Response;
+    try {
+      res = await fetchFn(url.toString(), {
         signal: controller.signal,
         next: { revalidate },
-      } as RequestInit,
-    );
-  } catch (cause: unknown) {
-    const errName =
-      typeof cause === 'object' && cause !== null && 'name' in cause
-        ? String((cause as { name?: unknown }).name)
-        : '';
-    const errMessage =
-      cause instanceof Error ? cause.message : String(cause ?? '');
-
-    if (
-      controller.signal.aborted ||
-      errName === 'TimeoutError' ||
-      errName === 'AbortError' ||
-      /timed?\s*out|aborted/i.test(errMessage)
-    ) {
-      throw new ApiRequestError(
-        `API request timed out after ${timeoutMs}ms: ${path}`,
-        { kind: 'timeout', path, cause },
-      );
+      } as RequestInit);
+      if (performance.now() >= deadline) abortTimeout();
+      controller.signal.throwIfAborted();
+    } catch (cause: unknown) {
+      if (controller.signal.aborted) throw timeoutError(cause);
+      throw new ApiRequestError(`API network request failed: ${path}`, {
+        kind: "network",
+        path,
+        cause,
+      });
     }
-
-    throw new ApiRequestError(`API network request failed: ${path}`, {
-      kind: 'network',
-      path,
-      cause,
-    });
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-
-  if (res.status === 404) {
-    return null;
-  }
-
-  if (res.status === 429) {
-    throw new ApiRequestError(`API rate limit exceeded (429): ${path}`, {
-      kind: 'rate_limited',
-      status: 429,
-      path,
-    });
-  }
-
-  if (!res.ok) {
-    throw new ApiRequestError(
-      `API upstream HTTP ${res.status} on ${path}`,
-      {
-        kind: 'upstream_http',
+    // Status errors are handled without parsing their body; do not leave that stream open.
+    if (!res.ok) void res.body?.cancel().catch(() => undefined);
+    if (res.status === 404) return null;
+    if (res.status === 429)
+      throw new ApiRequestError(`API rate limit exceeded (429): ${path}`, {
+        kind: "rate_limited",
+        status: 429,
+        path,
+      });
+    if (!res.ok)
+      throw new ApiRequestError(`API upstream HTTP ${res.status} on ${path}`, {
+        kind: "upstream_http",
         status: res.status,
         path,
-      },
-    );
-  }
-
-  try {
-    return (await res.json()) as T;
-  } catch (cause: unknown) {
-    throw new ApiRequestError(`Invalid JSON payload returned from ${path}`, {
-      kind: 'invalid_json',
-      status: res.status,
-      path,
-      cause,
-    });
+      });
+    try {
+      const data = (await res.json()) as T;
+      // Keep the signal active through body consumption, including ignored/late aborts.
+      if (performance.now() >= deadline) abortTimeout();
+      controller.signal.throwIfAborted();
+      return data;
+    } catch (cause: unknown) {
+      if (controller.signal.aborted) throw timeoutError(cause, res.status);
+      throw new ApiRequestError(
+        `API response ${cause instanceof SyntaxError ? "JSON parsing" : "body transfer"} failed: ${path}`,
+        {
+          kind: cause instanceof SyntaxError ? "invalid_json" : "network",
+          status: res.status,
+          path,
+          cause,
+        },
+      );
+    }
+  } finally {
+    clearTimeout(timeoutHandle);
   }
 }
 
@@ -199,7 +199,7 @@ export async function getNowPlaying(
   options?: ApiRequestOptions,
 ): Promise<Movie[]> {
   const data = await apiGet<Movie[]>(
-    '/movies/now-playing',
+    "/movies/now-playing",
     { ...filters },
     300,
     options,
@@ -218,7 +218,12 @@ export async function getMovieDetail(
 export async function getCinemas(
   options?: ApiRequestOptions,
 ): Promise<CinemaChain[]> {
-  const data = await apiGet<CinemaChain[]>('/movies/filters', {}, 3600, options);
+  const data = await apiGet<CinemaChain[]>(
+    "/movies/filters",
+    {},
+    3600,
+    options,
+  );
   return data ?? [];
 }
 
@@ -238,7 +243,7 @@ export async function getUpcomingMovies(
   options?: ApiRequestOptions,
 ): Promise<UpcomingMovie[]> {
   const data = await apiGet<UpcomingMovie[]>(
-    '/movies/upcoming',
+    "/movies/upcoming",
     {},
     3600,
     options,
@@ -260,7 +265,7 @@ export async function getNearbyCinemas(
   options?: ApiRequestOptions,
 ) {
   const data = await apiGet<(CinemaLocation & { distance: number })[]>(
-    '/movies/nearby',
+    "/movies/nearby",
     { lat, lng },
     0,
     options,
