@@ -54,12 +54,24 @@ async function main() {
       'prisma/schema.prisma',
       '--exit-code',
     ]);
-    run('jest/bin/jest', [
-      '--config',
-      'test/jest-integration.json',
-      '--runInBand',
-      ...process.argv.slice(2),
-    ]);
+    if (process.argv.includes('--web')) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          require('node:path').resolve('../web/test/run-database-tests.cjs'),
+          ...(process.argv.includes('--browser') ? ['--browser'] : []),
+        ],
+        { env, stdio: 'inherit', windowsHide: true },
+      );
+      if (result.status !== 0)
+        throw new Error('Standalone web database/browser tests failed');
+    } else
+      run('jest/bin/jest', [
+        '--config',
+        'test/jest-integration.json',
+        '--runInBand',
+        ...process.argv.slice(2),
+      ]);
   } finally {
     if (created) {
       await admin.$queryRaw`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${database} AND pid <> pg_backend_pid()`;
